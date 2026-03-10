@@ -1,0 +1,66 @@
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+// ── agent_sdks ──────────────────────────────────────────────────────────────
+
+export const agentSdks = sqliteTable("agent_sdks", {
+  name: text("name").primaryKey(),
+  authentication: text("authentication", {
+    enum: ["unauthenticated", "host", "dedicated", "api-key"],
+  }).notNull(),
+});
+
+// ── llm_models ──────────────────────────────────────────────────────────────
+
+export const llmModels = sqliteTable("llm_models", {
+  name: text("name").primaryKey(),
+  sdkName: text("sdk_name")
+    .notNull()
+    .references(() => agentSdks.name, { onDelete: "cascade" }),
+  reasoningLevels: text("reasoning_levels", { mode: "json" })
+    .$type<string[]>(),
+});
+
+// -- threads ──────────────────────────────────────────────────────────────────
+
+export const threads = sqliteTable("threads", {
+  id: text("id").primaryKey(),
+  sdkThreadId: text("sdk_thread_id"),
+  cliSecret: text("cli_secret"),
+  model: text("model").notNull(),
+  reasoningLevel: text("reasoning_level").notNull(),
+  additionalModelInstructions: text("additional_model_instructions"),
+  status: text("status", { enum: ["pending", "ready", "deleting"] }).notNull(),
+  currentSdkTurnId: text("current_sdk_turn_id"),
+  isCurrentTurnRunning: integer("is_current_turn_running", { mode: "boolean" }).notNull(),
+  workspace: text("workspace").notNull(),
+  runtimeContainer: text("runtime_container").notNull(),
+  dindContainer: text("dind_container"),
+  // home directory within the container
+  homeDirectory: text("home_directory").notNull(),
+  // uid of the user within the container
+  uid: integer("uid").notNull(),
+  // gid of the user within the container
+  gid: integer("gid").notNull(),
+});
+
+// -- thread_user_message_request_store ----------------------------------------
+
+export const threadUserMessageRequestStore = sqliteTable("thread_user_message_request_store", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  threadId: text("thread_id")
+    .notNull()
+    .references(() => threads.id, { onDelete: "cascade" }),
+  sdkTurnId: text("sdk_turn_id").notNull(),
+  requestId: text("request_id").notNull(),
+  sdkItemId: text("sdk_item_id"),
+});
+
+// -- daemon_state ------------------------------------------------------------
+
+export const daemonState = sqliteTable("daemon_state", {
+  id: text("id").primaryKey(),
+  pid: integer("pid"),
+  logPath: text("log_path"),
+  startedAt: text("started_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

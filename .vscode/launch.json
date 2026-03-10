@@ -1,0 +1,36 @@
+{
+  "version": "0.1.0",
+  "configurations": [
+    {
+      "name": "Debug companyhelm CLI",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/dist/cli.js",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "npm: build",
+      "args": [
+        "runner",
+        "start",
+        "--server-url",
+        "localhost:50051",
+        "--log-level",
+        "DEBUG",
+        "--secret",
+        "${input:userSecret}"
+      ],
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "userSecret",
+      "type": "promptString",
+      "description": "Bearer secret for --secret",
+      "password": true
+    }
+  ]
+}

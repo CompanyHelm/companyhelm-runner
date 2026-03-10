@@ -1,0 +1,90 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1771739401031,
+      "tag": "0000_nice_stepford_cuckoos",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1771741349847,
+      "tag": "0001_third_vermin",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1771746278024,
+      "tag": "0002_kind_sue_storm",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1771835090166,
+      "tag": "0003_dizzy_micromax",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1771917405532,
+      "tag": "0004_sloppy_alex_wilder",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1771997158851,
+      "tag": "0005_open_toro",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1772060984769,
+      "tag": "0006_fixed_jack_flag",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1772064130696,
+      "tag": "0007_mute_lord_tyger",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1772491465209,
+      "tag": "0008_melted_flatman",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1772495488679,
+      "tag": "0009_powerful_hellcat",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1772664695504,
+      "tag": "0010_wealthy_dorian_gray",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1772775000000,
+      "tag": "0011_actual_lucky",
+      "breakpoints": true
+    }
+  ]
+}

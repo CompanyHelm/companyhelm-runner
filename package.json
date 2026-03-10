@@ -1,0 +1,53 @@
+{
+  "name": "@companyhelm/runner",
+  "version": "0.0.12",
+  "description": "Run the CompanyHelm runner in fully isolated Docker sandboxes.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CompanyHelm/companyhelm-runner"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "companyhelm-runner": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "drizzle",
+    "RUNTIME_IMAGE_VERSION"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-templates.js",
+    "start": "npm run build && node dist/cli.js",
+    "test": "npm run build && vitest run",
+    "test:unit": "npm run build && vitest run tests/unit",
+    "test:integration": "npm run build && vitest run tests/integration",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "generate:codex-app-server": "docker run --rm --user \"$(id -u):$(id -g)\" -e CODEX_HOME=/workspace/node_modules/.cache/codex -v \"$PWD:/workspace\" -w /workspace companyhelm/runner:$(tr -d '[:space:]' < RUNTIME_IMAGE_VERSION) bash -lc 'mkdir -p /workspace/node_modules/.cache/codex; source \"$NVM_DIR/nvm.sh\"; codex app-server generate-ts --out src/generated/codex-app-server'"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.11.0",
+    "@clack/prompts": "^1.0.1",
+    "@companyhelm/protos": "0.5.16",
+    "@grpc/grpc-js": "^1.14.3",
+    "@libsql/client": "^0.17.0",
+    "commander": "^14.0.0",
+    "dockerode": "^4.0.9",
+    "drizzle-orm": "^0.45.1",
+    "figlet": "^1.10.0",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^4.0.1",
+    "@types/figlet": "^1.7.0",
+    "@types/node": "^24.0.0",
+    "drizzle-kit": "^0.31.9",
+    "typescript": "^5.8.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,136 @@
+# syntax=docker/dockerfile:1.7
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG NVM_VERSION=v0.39.7
+ARG NODE_VERSION=24
+ARG PLAYWRIGHT_VERSION=1.53.2
+ARG PLAYWRIGHT_CLI_VERSION=0.1.1
+ARG TARGETARCH
+
+ENV TZ=Etc/UTC \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    NVM_DIR=/usr/local/nvm \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PATH=/usr/local/nvm/current/bin:${PATH}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ADD https://download.docker.com/linux/ubuntu/gpg /tmp/docker.asc
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && mv /tmp/docker.asc /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && CODENAME="$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")" \
+    && printf '%s\n' \
+      "Types: deb" \
+      "URIs: https://download.docker.com/linux/ubuntu" \
+      "Suites: ${CODENAME}" \
+      "Components: stable" \
+      "Signed-By: /etc/apt/keyrings/docker.asc" \
+      > /etc/apt/sources.list.d/docker.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      bash \
+      curl \
+      gh \
+      git \
+      iproute2 \
+      jq \
+      libasound2t64 \
+      libatk-bridge2.0-0 \
+      libatk1.0-0 \
+      libatspi2.0-0 \
+      libcairo2 \
+      libcups2 \
+      libdbus-1-3 \
+      dnsutils \
+      iputils-ping \
+      libdrm2 \
+      libgbm1 \
+      libglib2.0-0 \
+      libgtk-3-0 \
+      libnspr4 \
+      libnss3 \
+      libpango-1.0-0 \
+      libx11-6 \
+      libx11-xcb1 \
+      libxcb1 \
+      libxcomposite1 \
+      libxdamage1 \
+      libxext6 \
+      libxfixes3 \
+      libxkbcommon0 \
+      libxrandr2 \
+      libxshmfence1 \
+      make \
+      netcat-openbsd \
+      python3 \
+      python3-pip \
+      ripgrep \
+      socat \
+      sudo \
+      tini \
+      unzip \
+      vim \
+      xauth \
+      xvfb \
+      docker-ce-cli \
+      docker-buildx-plugin \
+      docker-compose-plugin \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+      /var/cache/apt/archives/* \
+      /var/cache/apt/*.bin \
+      /var/log/apt/*
+
+# Install AWS CLI v2
+RUN case "${TARGETARCH}" in \
+      amd64) AWS_ARCH="x86_64" ;; \
+      arm64) AWS_ARCH="aarch64" ;; \
+      *) echo "Unsupported architecture for AWS CLI: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update \
+    && rm -rf /tmp/aws /tmp/awscliv2.zip
+
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && install -m 0755 /root/.local/bin/uv /usr/local/bin/uv \
+    && if [[ -x /root/.local/bin/uvx ]]; then install -m 0755 /root/.local/bin/uvx /usr/local/bin/uvx; fi \
+    && rm -rf /root/.local \
+    && sed -i '/\. "\$HOME\/\.local\/bin\/env"/d' /root/.profile /root/.bashrc
+
+# Install Node.js and Playwright
+RUN mkdir -p "$NVM_DIR" \
+    && curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh" | bash \
+    && source "$NVM_DIR/nvm.sh" \
+    && nvm install "$NODE_VERSION" \
+    && nvm alias default "$NODE_VERSION" \
+    && NODE_RESOLVED_VERSION="$(nvm version default)" \
+    && ln -s "$NVM_DIR/versions/node/$NODE_RESOLVED_VERSION" "$NVM_DIR/current" \
+    && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global \
+         @openai/codex \
+         @playwright/cli@"${PLAYWRIGHT_CLI_VERSION}" \
+         playwright@"${PLAYWRIGHT_VERSION}" \
+         @companyhelm/agent-cli \
+    && npx playwright install --no-shell chromium \
+    && CHROMIUM_BIN="$(find "${PLAYWRIGHT_BROWSERS_PATH}" -type f -path "*/chrome-linux/chrome" | head -n 1)" \
+    && [[ -n "${CHROMIUM_BIN}" ]] \
+    && install -d /opt/google/chrome \
+    && ln -sf "${CHROMIUM_BIN}" /opt/google/chrome/chrome \
+    && npm cache clean --force \
+    && rm -rf /root/.npm \
+    && rm -rf "$NVM_DIR/.cache"
+
+COPY scripts/runtime/list-installations /usr/local/bin/list-installations
+COPY scripts/runtime/gh-use-installation /usr/local/bin/gh-use-installation
+RUN chmod 0755 /usr/local/bin/list-installations /usr/local/bin/gh-use-installation
+
+# Set environment variables
+ENV DOCKER_HOST=tcp://127.0.0.1:2375

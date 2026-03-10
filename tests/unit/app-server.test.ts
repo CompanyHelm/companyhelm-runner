@@ -1,0 +1,459 @@
+import assert from "node:assert/strict";
+import { setTimeout as sleep } from "node:timers/promises";
+import { AppServerService } from "../../dist/service/app_server.js";
+
+type TransportEvent =
+  | { type: "stdout"; payload: Buffer }
+  | { type: "stderr"; payload: string }
+  | { type: "error"; reason: string };
+
+class FakeTransport {
+  readonly sentRequests: Array<{ id: string | number; method: string }> = [];
+  private readonly queue: Array<TransportEvent | null> = [];
+  private readonly waiters: Array<(event: TransportEvent | null) => void> = [];
+  private closed = false;
+
+  async start(): Promise<void> {}
+
+  async stop(): Promise<void> {
+    this.close();
+  }
+
+  async sendRaw(payload: string): Promise<void> {
+    const lines = payload
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    for (const line of lines) {
+      const message = JSON.parse(line) as { id?: string | number; method?: string };
+      if ((typeof message.id === "number" || typeof message.id === "string") && typeof message.method === "string") {
+        this.sentRequests.push({ id: message.id, method: message.method });
+      }
+
+      if (message.method === "initialize" && typeof message.id === "number") {
+        this.emitJson({
+          id: message.id,
+          result: {},
+        });
+      }
+    }
+  }
+
+  async *receiveOutput(): AsyncGenerator<TransportEvent, void, void> {
+    while (true) {
+      const event = await this.nextEvent();
+      if (!event) {
+        return;
+      }
+      yield event;
+    }
+  }
+
+  emitJson(payload: unknown): void {
+    this.push({
+      type: "stdout",
+      payload: Buffer.from(`${JSON.stringify(payload)}\n`, "utf8"),
+    });
+  }
+
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.push(null);
+  }
+
+  private push(event: TransportEvent | null): void {
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter(event);
+      return;
+    }
+    this.queue.push(event);
+  }
+
+  private async nextEvent(): Promise<TransportEvent | null> {
+    if (this.queue.length > 0) {
+      return this.queue.shift() ?? null;
+    }
+    return new Promise<TransportEvent | null>((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+}
+
+class DelayedInitializeRetryTransport extends FakeTransport {
+  private initializeAttempts = 0;
+  private firstInitializeRequestId: string | number | null = null;
+
+  override async sendRaw(payload: string): Promise<void> {
+    const lines = payload
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    for (const line of lines) {
+      const message = JSON.parse(line) as { id?: string | number; method?: string };
+      if ((typeof message.id === "number" || typeof message.id === "string") && typeof message.method === "string") {
+        this.sentRequests.push({ id: message.id, method: message.method });
+      }
+
+      if (message.method !== "initialize" || typeof message.id !== "number") {
+        continue;
+      }
+
+      this.initializeAttempts += 1;
+      if (this.initializeAttempts === 1) {
+        // Intentionally do not respond to the first initialize request so it times out
+        // and forces the retry path.
+        this.firstInitializeRequestId = message.id;
+        continue;
+      }
+
+      this.emitJson({
+        id: message.id,
+        error: {
+          code: -32600,
+          message: "Already initialized",
+        },
+      });
+
+      // Simulate a stale delayed response arriving after the first request timed out.
+      if (this.firstInitializeRequestId !== null) {
+        this.emitJson({
+          id: this.firstInitializeRequestId,
+          result: {},
+        });
+      }
+    }
+  }
+}
+
+async function waitForRequestId(
+  transport: FakeTransport,
+  method: string,
+  timeoutMs = 1_000,
+): Promise<string | number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const request = transport.sentRequests.find((entry) => entry.method === method);
+    if (request) {
+      return request.id;
+    }
+    await sleep(5);
+  }
+  throw new Error(`Timed out waiting for request method '${method}'.`);
+}
+
+test("AppServerService treats 'Already initialized' initialize retries as success", async () => {
+  const transport = new DelayedInitializeRetryTransport();
+  const service = new AppServerService(transport as any, "test-client");
+
+  await service.start();
+
+  const initializeRequests = transport.sentRequests.filter((entry) => entry.method === "initialize");
+  assert.equal(initializeRequests.length >= 2, true);
+
+  await service.stop();
+});
+
+test("AppServerService preserves request responses while waiting for turn completion notifications", async () => {
+  const transport = new FakeTransport();
+  const service = new AppServerService(transport as any, "test-client");
+
+  await service.start();
+
+  const completionPromise = service.waitForTurnCompletion("thread-1", "turn-1", undefined, 1_000);
+  const steerPromise = (service as any).request(
+    "turn/steer",
+    {
+      threadId: "thread-1",
+      input: [],
+      expectedTurnId: "turn-1",
+    },
+    300,
+  ) as Promise<unknown>;
+
+  const steerRequestId = await waitForRequestId(transport, "turn/steer");
+
+  transport.emitJson({
+    id: steerRequestId,
+    result: { turnId: "turn-1" },
+  });
+
+  transport.emitJson({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+      },
+    },
+  });
+
+  assert.deepEqual(await steerPromise, { turnId: "turn-1" });
+  assert.equal(await completionPromise, "completed");
+
+  await service.stop();
+});
+
+test("AppServerService ignores retryable turn error notifications while waiting for completion", async () => {
+  const transport = new FakeTransport();
+  const service = new AppServerService(transport as any, "test-client");
+
+  await service.start();
+
+  const completionPromise = service.waitForTurnCompletion("thread-1", "turn-1", undefined, 1_000);
+
+  transport.emitJson({
+    method: "error",
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      willRetry: true,
+      error: {
+        message: "Reconnecting... 1/5",
+        codexErrorInfo: null,
+        additionalDetails: null,
+      },
+    },
+  });
+
+  await sleep(50);
+
+  transport.emitJson({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+      },
+    },
+  });
+
+  assert.equal(await completionPromise, "completed");
+
+  await service.stop();
+});
+
+test("AppServerService forwards notifications that arrive shortly after turn completion", async () => {
+  const transport = new FakeTransport();
+  const service = new AppServerService(transport as any, "test-client");
+  const seenMethods: string[] = [];
+
+  await service.start();
+
+  const completionPromise = service.waitForTurnCompletion(
+    "thread-1",
+    "turn-1",
+    (notification) => {
+      seenMethods.push(notification.method);
+    },
+    1_000,
+  );
+
+  transport.emitJson({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-1",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+      },
+    },
+  });
+
+  await sleep(50);
+
+  transport.emitJson({
+    method: "thread/name/updated",
+    params: {
+      threadId: "thread-1",
+      threadName: "Renamed thread",
+    },
+  });
+
+  assert.equal(await completionPromise, "completed");
+  assert.deepEqual(seenMethods, ["turn/completed", "thread/name/updated"]);
+
+  await service.stop();
+});
+
+test("AppServerService includes thread context in app-server debug logs", async () => {
+  const transport = new FakeTransport();
+  const debugLogs: string[] = [];
+  let sdkThreadId: string | null = null;
+  const service = new AppServerService(
+    transport as any,
+    "test-client",
+    {
+      debug(message: string): void {
+        debugLogs.push(message);
+      },
+    },
+    () => ({
+      threadId: "thread-local-1",
+      sdkThreadId,
+    }),
+  );
+
+  await service.start();
+  sdkThreadId = "sdk-thread-1";
+
+  const listPromise = service.listModels(null, 1);
+  const listRequestId = await waitForRequestId(transport, "model/list");
+  transport.emitJson({
+    id: listRequestId,
+    result: {
+      data: [],
+      nextCursor: null,
+    },
+  });
+
+  await listPromise;
+
+  assert.equal(
+    debugLogs.some((line) => line.includes("[app-server][outgoing][thread: thread-local-1][sdkThread: sdk-thread-1]")),
+    true,
+  );
+  assert.equal(
+    debugLogs.some((line) => line.includes("[app-server][incoming][thread: thread-local-1][sdkThread: sdk-thread-1]")),
+    true,
+  );
+
+  await service.stop();
+});
+
+test("AppServerService logs outgoing thread/start payload including developerInstructions", async () => {
+  const transport = new FakeTransport();
+  const debugLogs: string[] = [];
+  const service = new AppServerService(transport as any, "test-client", {
+    debug(message: string): void {
+      debugLogs.push(message);
+    },
+  });
+
+  await service.start();
+
+  const startPromise = service.startThread({
+    model: "gpt-5.3-codex",
+    modelProvider: null,
+    cwd: "/workspace",
+    approvalPolicy: "never",
+    sandbox: "danger-full-access",
+    config: null,
+    baseInstructions: null,
+    developerInstructions: "Use strict JSON outputs.",
+    personality: null,
+    ephemeral: null,
+    experimentalRawEvents: false,
+    persistExtendedHistory: true,
+  });
+  const requestId = await waitForRequestId(transport, "thread/start");
+  transport.emitJson({
+    id: requestId,
+    result: {
+      thread: {
+        id: "sdk-thread-1",
+        path: "/workspace/rollouts/thread.json",
+      },
+    },
+  });
+
+  await startPromise;
+
+  assert.equal(
+    debugLogs.some(
+      (line) =>
+        line.includes("[app-server][outgoing]") &&
+        line.includes("\"method\":\"thread/start\"") &&
+        line.includes("\"developerInstructions\":\"Use strict JSON outputs.\""),
+    ),
+    true,
+  );
+
+  await service.stop();
+});
+
+test("AppServerService uses caller supplied request id for thread/start and returns the response envelope", async () => {
+  const transport = new FakeTransport();
+  const service = new AppServerService(transport as any, "test-client");
+
+  await service.start();
+
+  const startPromise = service.startThreadWithResponse(
+    {
+      model: "gpt-5.3-codex",
+      modelProvider: null,
+      cwd: "/workspace",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      config: null,
+      baseInstructions: null,
+      developerInstructions: null,
+      personality: null,
+      ephemeral: null,
+      experimentalRawEvents: false,
+      persistExtendedHistory: true,
+    },
+    "create-thread-request-1",
+  );
+  const requestId = await waitForRequestId(transport, "thread/start");
+  assert.equal(requestId, "create-thread-request-1");
+  transport.emitJson({
+    id: "create-thread-request-1",
+    result: {
+      thread: {
+        id: "sdk-thread-1",
+        path: "/workspace/rollouts/thread.json",
+      },
+    },
+  });
+
+  const response = await startPromise;
+  assert.equal(response.id, "create-thread-request-1");
+  assert.equal(response.result.thread.id, "sdk-thread-1");
+
+  await service.stop();
+});
+
+test("AppServerService reads thread metadata via thread/read", async () => {
+  const transport = new FakeTransport();
+  const service = new AppServerService(transport as any, "test-client");
+
+  await service.start();
+
+  const readPromise = service.readThread({
+    threadId: "thread-1",
+    includeTurns: false,
+  });
+  const requestId = await waitForRequestId(transport, "thread/read");
+  transport.emitJson({
+    id: requestId,
+    result: {
+      thread: {
+        id: "thread-1",
+        preview: "Summarize lunar phases in seven words",
+        modelProvider: "openai",
+        createdAt: 1,
+        updatedAt: 2,
+        path: "/workspace/.codex/sessions/thread-1",
+        cwd: "/workspace",
+        cliVersion: "0.0.1",
+        source: "appServer",
+        gitInfo: null,
+        turns: [],
+      },
+    },
+  });
+
+  const response = await readPromise;
+  assert.equal(response.thread.id, "thread-1");
+  assert.equal(response.thread.preview, "Summarize lunar phases in seven words");
+
+  await service.stop();
+});
