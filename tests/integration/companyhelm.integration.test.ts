@@ -161,6 +161,20 @@ interface SeedStateDatabaseOptions {
   reasoningLevels?: string[];
 }
 
+interface SeedExistingThreadOptions {
+  threadId: string;
+  sdkThreadId?: string | null;
+  currentSdkTurnId?: string | null;
+  isCurrentTurnRunning?: boolean;
+  status?: "pending" | "ready" | "deleting";
+  runtimeContainer?: string;
+  dindContainer?: string | null;
+  workspace?: string;
+  homeDirectory?: string;
+  uid?: number;
+  gid?: number;
+}
+
 async function seedStateDatabase(homeDirectory: string, options?: SeedStateDatabaseOptions): Promise<void> {
   const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
   const { db, client } = await initDb(stateDbPath);
@@ -175,6 +189,36 @@ async function seedStateDatabase(homeDirectory: string, options?: SeedStateDatab
       name: options?.modelName ?? "gpt-5.3-codex",
       sdkName: "codex",
       reasoningLevels: options?.reasoningLevels ?? ["high"],
+    });
+  } finally {
+    client.close();
+  }
+}
+
+async function seedExistingThread(homeDirectory: string, options: SeedExistingThreadOptions): Promise<void> {
+  const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
+  const workspace = options.workspace
+    ?? path.join(resolveDefaultConfigDirectory(homeDirectory), "workspaces", `thread-${options.threadId}`);
+  await mkdir(workspace, { recursive: true });
+
+  const { db, client } = await initDb(stateDbPath);
+  try {
+    await db.insert(threads).values({
+      id: options.threadId,
+      sdkThreadId: options.sdkThreadId ?? null,
+      cliSecret: null,
+      model: "gpt-5.3-codex",
+      reasoningLevel: "high",
+      additionalModelInstructions: null,
+      status: options.status ?? "ready",
+      currentSdkTurnId: options.currentSdkTurnId ?? null,
+      isCurrentTurnRunning: options.isCurrentTurnRunning ?? false,
+      workspace,
+      runtimeContainer: options.runtimeContainer ?? `companyhelm-runtime-thread-${options.threadId}`,
+      dindContainer: options.dindContainer ?? `companyhelm-dind-thread-${options.threadId}`,
+      homeDirectory: options.homeDirectory ?? "/home/agent",
+      uid: options.uid ?? process.getuid(),
+      gid: options.gid ?? process.getgid(),
     });
   } finally {
     client.close();
@@ -2667,6 +2711,353 @@ test(
 );
 
 test(
+  "companyhelm root command clears stale running state at startup when the runtime container is stopped",
+  async () => {
+    const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-runner-user-message-stale-startup-");
+    let server: grpc.Server | undefined;
+    const previousHome = process.env.HOME;
+    const reconnectStopError = new Error("stop root command after stale startup validation");
+    const nativeSetTimeout = global.setTimeout;
+    let shouldStopAfterValidation = false;
+    let receivedRequestError: string | null = null;
+    const reconnectDelaySpy = vi.spyOn(global, "setTimeout").mockImplementation(((handler: any, timeout?: any, ...args: any[]) => {
+      if (shouldStopAfterValidation && timeout === 1_000) {
+        throw reconnectStopError;
+      }
+      return nativeSetTimeout(handler, timeout as any, ...args);
+    }) as typeof global.setTimeout);
+
+    const createThreadContainersSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "createThreadContainers")
+      .mockImplementation(async () => undefined);
+    const ensureContainerRunningSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureContainerRunning")
+      .mockImplementation(async () => undefined);
+    const waitForContainerRunningSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "waitForContainerRunning")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerIdentitySpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerIdentity")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerGitConfigSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerGitConfig")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerToolingSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerTooling")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerBashrcSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerBashrc")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerCodexConfigSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerAgentCliConfigSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerThreadGitSkillsSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadGitSkills")
+      .mockImplementation(async () => undefined);
+    const isContainerRunningSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "isContainerRunning")
+      .mockImplementation(async () => false);
+    const stopContainerSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "stopContainer")
+      .mockImplementation(async () => undefined);
+
+    const appServerStartSpy = vi.spyOn(AppServerService.prototype, "start").mockImplementation(async () => undefined);
+    const appServerStopSpy = vi.spyOn(AppServerService.prototype, "stop").mockImplementation(async () => undefined);
+    const resumeThreadSpy = vi.spyOn(AppServerService.prototype, "resumeThread").mockImplementation(async () => ({
+      thread: {
+        id: "sdk-thread-stale-startup",
+        path: "/workspace/rollouts/stale-startup.json",
+        turns: [],
+      },
+    } as any));
+    const startTurnSpy = vi.spyOn(AppServerService.prototype, "startTurn").mockImplementation(async () => ({
+      turn: { id: "sdk-turn-after-startup-heal" },
+    }));
+    const waitForTurnCompletionSpy = vi
+      .spyOn(AppServerService.prototype, "waitForTurnCompletion")
+      .mockImplementation(async () => "completed");
+
+    try {
+      process.env.HOME = homeDirectory;
+      await seedStateDatabase(homeDirectory);
+      await writeHostAuthFile(homeDirectory);
+      await seedExistingThread(homeDirectory, {
+        threadId: "thread-stale-startup",
+        sdkThreadId: "sdk-thread-stale-startup",
+        currentSdkTurnId: "sdk-turn-stale-startup",
+        isCurrentTurnRunning: true,
+      });
+
+      const started = await startFakeServer("/grpc", {
+        registerRunner(call, callback) {
+          callback(null, create(RegisterRunnerResponseSchema, {}));
+        },
+        controlChannel(call) {
+          call.write(
+            create(ServerMessageSchema, {
+              request: {
+                case: "createUserMessageRequest",
+                value: {
+                  threadId: "thread-stale-startup",
+                  text: "message after stale startup cleanup",
+                  allowSteer: false,
+                },
+              },
+            }),
+          );
+
+          call.on("data", (message) => {
+            if (message.payload.case === "requestError") {
+              receivedRequestError = message.payload.value.errorMessage;
+              shouldStopAfterValidation = true;
+              call.end();
+              return;
+            }
+
+            if (message.payload.case === "turnUpdate" && message.payload.value.status === TurnStatus.COMPLETED) {
+              shouldStopAfterValidation = true;
+              call.end();
+            }
+          });
+        },
+      });
+
+      server = started.server;
+
+      await assert.rejects(
+        runRootCommand({
+          serverUrl: `127.0.0.1:${started.port}/grpc`,
+        }),
+        (error: unknown) => error === reconnectStopError,
+        "expected root command to stop after validating stale startup cleanup",
+      );
+
+      assert.equal(receivedRequestError, null, "did not expect stale running state to reject the user message");
+      assert.equal(isContainerRunningSpy.mock.calls.length >= 1, true, "expected startup reconciliation to inspect runtime state");
+      assert.equal(resumeThreadSpy.mock.calls.length, 1, "expected only the normal execution resume after startup cleanup");
+      assert.equal(startTurnSpy.mock.calls.length, 1, "expected a fresh turn after startup cleanup");
+
+      const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
+      const { db, client } = await initDb(stateDbPath);
+      try {
+        const [threadRow] = await db.select().from(threads).where(eq(threads.id, "thread-stale-startup")).limit(1);
+        assert.equal(threadRow?.isCurrentTurnRunning, false, "expected startup cleanup to clear stale running state");
+        assert.equal(threadRow?.currentSdkTurnId, "sdk-turn-after-startup-heal", "expected the new turn id to replace the stale turn id");
+      } finally {
+        client.close();
+      }
+    } finally {
+      reconnectDelaySpy.mockRestore();
+      createThreadContainersSpy.mockRestore();
+      ensureContainerRunningSpy.mockRestore();
+      waitForContainerRunningSpy.mockRestore();
+      ensureRuntimeContainerIdentitySpy.mockRestore();
+      ensureRuntimeContainerGitConfigSpy.mockRestore();
+      ensureRuntimeContainerToolingSpy.mockRestore();
+      ensureRuntimeContainerBashrcSpy.mockRestore();
+      ensureRuntimeContainerCodexConfigSpy.mockRestore();
+      ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
+      ensureRuntimeContainerThreadGitSkillsSpy.mockRestore();
+      isContainerRunningSpy.mockRestore();
+      stopContainerSpy.mockRestore();
+      appServerStartSpy.mockRestore();
+      appServerStopSpy.mockRestore();
+      resumeThreadSpy.mockRestore();
+      startTurnSpy.mockRestore();
+      waitForTurnCompletionSpy.mockRestore();
+
+      if (server) {
+        await shutdownServer(server);
+      }
+
+      process.env.HOME = previousHome;
+      await rm(homeDirectory, { recursive: true, force: true });
+    }
+  },
+  180_000,
+);
+
+test(
+  "companyhelm root command lazily clears stale running state when the SDK turn is no longer in progress",
+  async () => {
+    const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-runner-user-message-stale-lazy-");
+    let server: grpc.Server | undefined;
+    const previousHome = process.env.HOME;
+    const reconnectStopError = new Error("stop root command after stale lazy validation");
+    const nativeSetTimeout = global.setTimeout;
+    let shouldStopAfterValidation = false;
+    let receivedRequestError: string | null = null;
+    const reconnectDelaySpy = vi.spyOn(global, "setTimeout").mockImplementation(((handler: any, timeout?: any, ...args: any[]) => {
+      if (shouldStopAfterValidation && timeout === 1_000) {
+        throw reconnectStopError;
+      }
+      return nativeSetTimeout(handler, timeout as any, ...args);
+    }) as typeof global.setTimeout);
+
+    const createThreadContainersSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "createThreadContainers")
+      .mockImplementation(async () => undefined);
+    const ensureContainerRunningSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureContainerRunning")
+      .mockImplementation(async () => undefined);
+    const waitForContainerRunningSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "waitForContainerRunning")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerIdentitySpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerIdentity")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerGitConfigSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerGitConfig")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerToolingSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerTooling")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerBashrcSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerBashrc")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerCodexConfigSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerAgentCliConfigSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
+      .mockImplementation(async () => undefined);
+    const ensureRuntimeContainerThreadGitSkillsSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadGitSkills")
+      .mockImplementation(async () => undefined);
+    const isContainerRunningSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "isContainerRunning")
+      .mockImplementation(async () => true);
+    const stopContainerSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "stopContainer")
+      .mockImplementation(async () => undefined);
+
+    const appServerStartSpy = vi.spyOn(AppServerService.prototype, "start").mockImplementation(async () => undefined);
+    const appServerStopSpy = vi.spyOn(AppServerService.prototype, "stop").mockImplementation(async () => undefined);
+    const resumeThreadSpy = vi.spyOn(AppServerService.prototype, "resumeThread").mockImplementation(async () => ({
+      thread: {
+        id: "sdk-thread-stale-lazy",
+        path: "/workspace/rollouts/stale-lazy.json",
+        turns: [
+          {
+            id: "sdk-turn-stale-lazy",
+            status: "completed",
+            items: [],
+            error: null,
+          },
+        ],
+      },
+    } as any));
+    const startTurnSpy = vi.spyOn(AppServerService.prototype, "startTurn").mockImplementation(async () => ({
+      turn: { id: "sdk-turn-after-lazy-heal" },
+    }));
+    const waitForTurnCompletionSpy = vi
+      .spyOn(AppServerService.prototype, "waitForTurnCompletion")
+      .mockImplementation(async () => "completed");
+
+    try {
+      process.env.HOME = homeDirectory;
+      await seedStateDatabase(homeDirectory);
+      await writeHostAuthFile(homeDirectory);
+      await seedExistingThread(homeDirectory, {
+        threadId: "thread-stale-lazy",
+        sdkThreadId: "sdk-thread-stale-lazy",
+        currentSdkTurnId: "sdk-turn-stale-lazy",
+        isCurrentTurnRunning: true,
+      });
+
+      const started = await startFakeServer("/grpc", {
+        registerRunner(call, callback) {
+          callback(null, create(RegisterRunnerResponseSchema, {}));
+        },
+        controlChannel(call) {
+          call.write(
+            create(ServerMessageSchema, {
+              request: {
+                case: "createUserMessageRequest",
+                value: {
+                  threadId: "thread-stale-lazy",
+                  text: "message after lazy stale cleanup",
+                  allowSteer: false,
+                },
+              },
+            }),
+          );
+
+          call.on("data", (message) => {
+            if (message.payload.case === "requestError") {
+              receivedRequestError = message.payload.value.errorMessage;
+              shouldStopAfterValidation = true;
+              call.end();
+              return;
+            }
+
+            if (message.payload.case === "turnUpdate" && message.payload.value.status === TurnStatus.COMPLETED) {
+              shouldStopAfterValidation = true;
+              call.end();
+            }
+          });
+        },
+      });
+
+      server = started.server;
+
+      await assert.rejects(
+        runRootCommand({
+          serverUrl: `127.0.0.1:${started.port}/grpc`,
+        }),
+        (error: unknown) => error === reconnectStopError,
+        "expected root command to stop after validating lazy stale cleanup",
+      );
+
+      assert.equal(receivedRequestError, null, "did not expect stale running state to reject the user message");
+      assert.equal(isContainerRunningSpy.mock.calls.length >= 1, true, "expected stale-state check to inspect runtime state");
+      assert.equal(resumeThreadSpy.mock.calls.length, 1, "expected lazy stale-state recovery to resume the SDK thread");
+      assert.equal(startTurnSpy.mock.calls.length, 1, "expected a fresh turn after lazy stale cleanup");
+
+      const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
+      const { db, client } = await initDb(stateDbPath);
+      try {
+        const [threadRow] = await db.select().from(threads).where(eq(threads.id, "thread-stale-lazy")).limit(1);
+        assert.equal(threadRow?.isCurrentTurnRunning, false, "expected lazy cleanup to clear stale running state");
+        assert.equal(threadRow?.currentSdkTurnId, "sdk-turn-after-lazy-heal", "expected the new turn id to replace the stale turn id");
+      } finally {
+        client.close();
+      }
+    } finally {
+      reconnectDelaySpy.mockRestore();
+      createThreadContainersSpy.mockRestore();
+      ensureContainerRunningSpy.mockRestore();
+      waitForContainerRunningSpy.mockRestore();
+      ensureRuntimeContainerIdentitySpy.mockRestore();
+      ensureRuntimeContainerGitConfigSpy.mockRestore();
+      ensureRuntimeContainerToolingSpy.mockRestore();
+      ensureRuntimeContainerBashrcSpy.mockRestore();
+      ensureRuntimeContainerCodexConfigSpy.mockRestore();
+      ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
+      ensureRuntimeContainerThreadGitSkillsSpy.mockRestore();
+      isContainerRunningSpy.mockRestore();
+      stopContainerSpy.mockRestore();
+      appServerStartSpy.mockRestore();
+      appServerStopSpy.mockRestore();
+      resumeThreadSpy.mockRestore();
+      startTurnSpy.mockRestore();
+      waitForTurnCompletionSpy.mockRestore();
+
+      if (server) {
+        await shutdownServer(server);
+      }
+
+      process.env.HOME = previousHome;
+      await rm(homeDirectory, { recursive: true, force: true });
+    }
+  },
+  180_000,
+);
+
+test(
   "companyhelm root command steers a running turn without adding a second completion waiter",
   async () => {
     const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-user-message-steer-");
@@ -2709,6 +3100,9 @@ test(
     const ensureRuntimeContainerAgentCliConfigSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
       .mockImplementation(async () => undefined);
+    const isContainerRunningSpy = vi
+      .spyOn(threadLifecycle.ThreadContainerService.prototype, "isContainerRunning")
+      .mockImplementation(async () => true);
     const stopContainerSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "stopContainer")
       .mockImplementation(async () => undefined);
@@ -2925,6 +3319,7 @@ test(
       ensureRuntimeContainerBashrcSpy.mockRestore();
       ensureRuntimeContainerCodexConfigSpy.mockRestore();
       ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
+      isContainerRunningSpy.mockRestore();
       stopContainerSpy.mockRestore();
       appServerStartSpy.mockRestore();
       appServerStopSpy.mockRestore();

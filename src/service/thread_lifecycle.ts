@@ -808,6 +808,18 @@ export class ThreadContainerService {
     await this.waitForContainerRunning(name, timeoutMs);
   }
 
+  async isContainerRunning(name: string): Promise<boolean> {
+    try {
+      const details = await this.docker.getContainer(name).inspect();
+      return details.State?.Running === true;
+    } catch (error: unknown) {
+      if (isContainerNotFound(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+
   async ensureRuntimeContainerIdentity(name: string, user: ThreadContainerUser): Promise<void> {
     const script = buildRuntimeIdentityProvisionScript(user);
     this.runDockerExecScript(
