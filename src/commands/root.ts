@@ -269,6 +269,66 @@ async function stopAllThreadContainers(cfg: Config, logger: Logger): Promise<voi
   }
 }
 
+async function reconcileTrackedRunningThreadsOnStartup(cfg: Config, logger: Logger): Promise<void> {
+  const { db, client } = await initDb(cfg.state_db_path);
+  let runningThreads: Array<{
+    id: string;
+    sdkThreadId: string | null;
+    currentSdkTurnId: string | null;
+    runtimeContainer: string;
+  }> = [];
+  try {
+    runningThreads = await db
+      .select({
+        id: threads.id,
+        sdkThreadId: threads.sdkThreadId,
+        currentSdkTurnId: threads.currentSdkTurnId,
+        runtimeContainer: threads.runtimeContainer,
+      })
+      .from(threads)
+      .where(eq(threads.isCurrentTurnRunning, true))
+      .all();
+  } finally {
+    client.close();
+  }
+
+  if (runningThreads.length === 0) {
+    return;
+  }
+
+  const containerService = new ThreadContainerService();
+  for (const thread of runningThreads) {
+    if (!thread.sdkThreadId || !thread.currentSdkTurnId) {
+      await updateThreadTurnStateInDb(cfg.state_db_path, thread.id, {
+        isCurrentTurnRunning: false,
+      });
+      logger.warn(
+        `Cleared stale running state for thread '${thread.id}' during startup because the tracked SDK thread/turn identifiers were incomplete.`,
+      );
+      continue;
+    }
+
+    let runtimeRunning = false;
+    try {
+      runtimeRunning = await containerService.isContainerRunning(thread.runtimeContainer);
+    } catch (error: unknown) {
+      logger.warn(
+        `Failed checking runtime container '${thread.runtimeContainer}' for thread '${thread.id}' during startup reconciliation: ${toErrorMessage(error)}`,
+      );
+      continue;
+    }
+
+    if (!runtimeRunning) {
+      await updateThreadTurnStateInDb(cfg.state_db_path, thread.id, {
+        isCurrentTurnRunning: false,
+      });
+      logger.info(
+        `Cleared stale running state for thread '${thread.id}' during startup because runtime container '${thread.runtimeContainer}' is not running.`,
+      );
+    }
+  }
+}
+
 const SUPPORTED_REASONING_EFFORTS = new Set<ReasoningEffort>([
   "none",
   "minimal",
@@ -1434,6 +1494,128 @@ async function ensureThreadGitSkillsInRuntime(
       packages,
     },
   );
+}
+
+function buildThreadRuntimeUser(cfg: Config, threadState: ThreadMessageExecutionState): {
+  uid: number;
+  gid: number;
+  agentUser: string;
+  agentHomeDirectory: string;
+} {
+  return {
+    uid: threadState.uid,
+    gid: threadState.gid,
+    agentUser: cfg.agent_user,
+    agentHomeDirectory: threadState.homeDirectory,
+  };
+}
+
+async function reconcileThreadRunningStateBeforeUserMessage(
+  cfg: Config,
+  threadState: ThreadMessageExecutionState,
+  logger: Logger,
+): Promise<ThreadMessageExecutionState> {
+  if (!threadState.isCurrentTurnRunning) {
+    return threadState;
+  }
+
+  if (!threadState.sdkThreadId || !threadState.currentSdkTurnId) {
+    await updateThreadTurnState(cfg, threadState.id, {
+      isCurrentTurnRunning: false,
+    });
+    logger.warn(
+      `Cleared stale running state for thread '${threadState.id}' before user message handling because the tracked SDK thread/turn identifiers were incomplete.`,
+    );
+    return {
+      ...threadState,
+      isCurrentTurnRunning: false,
+    };
+  }
+
+  const containerService = new ThreadContainerService();
+  if (!(await containerService.isContainerRunning(threadState.runtimeContainer))) {
+    await stopThreadAppServerSession(threadState.id);
+    await updateThreadTurnState(cfg, threadState.id, {
+      isCurrentTurnRunning: false,
+    });
+    logger.info(
+      `Cleared stale running state for thread '${threadState.id}' before user message handling because runtime container '${threadState.runtimeContainer}' is not running.`,
+    );
+    return {
+      ...threadState,
+      isCurrentTurnRunning: false,
+    };
+  }
+
+  const threadMcpSetup = buildThreadCodexMcpSetup(
+    readWorkspaceThreadMcpConfig(threadState.workspace, logger),
+  );
+  const threadAgentCliConfig = readWorkspaceThreadAgentCliConfig(threadState.workspace, logger);
+  const appServerSession = await getOrCreateThreadAppServerSession(
+    threadState.id,
+    threadState.runtimeContainer,
+    threadMcpSetup.appServerEnv,
+    cfg.codex.app_server_client_name,
+    logger,
+  );
+  const runtimeUser = buildThreadRuntimeUser(cfg, threadState);
+
+  await ensureThreadRuntimeReady({
+    dindContainer: threadState.dindContainer,
+    runtimeContainer: threadState.runtimeContainer,
+    containerService,
+    gitUserName: cfg.git_user_name,
+    gitUserEmail: cfg.git_user_email,
+    user: runtimeUser,
+  });
+  await ensureThreadGitSkillsInRuntime(cfg, threadState, containerService, logger);
+  if (threadAgentCliConfig) {
+    await containerService.ensureRuntimeContainerAgentCliConfig(
+      threadState.runtimeContainer,
+      runtimeUser,
+      threadAgentCliConfig,
+    );
+  }
+  if (!appServerSession.started) {
+    await containerService.ensureRuntimeContainerCodexConfig(
+      threadState.runtimeContainer,
+      runtimeUser,
+      threadMcpSetup.configToml,
+    );
+  }
+
+  await ensureThreadAppServerSessionStarted(appServerSession);
+
+  const resumeResult = await appServerSession.appServer.resumeThread({
+    threadId: threadState.sdkThreadId,
+    approvalPolicy: YOLO_APPROVAL_POLICY,
+    sandbox: YOLO_SANDBOX_MODE,
+    persistExtendedHistory: true,
+  });
+  appServerSession.sdkThreadId = resumeResult.thread.id;
+  appServerSession.rolloutPath = resumeResult.thread.path;
+  rememberThreadRolloutPath(threadState.id, resumeResult.thread.path);
+
+  const trackedTurn = resumeResult.thread.turns.find((turn) => turn.id === threadState.currentSdkTurnId);
+  if (trackedTurn?.status === "inProgress") {
+    return {
+      ...threadState,
+      sdkThreadId: resumeResult.thread.id,
+    };
+  }
+
+  await updateThreadTurnState(cfg, threadState.id, {
+    sdkThreadId: resumeResult.thread.id,
+    isCurrentTurnRunning: false,
+  });
+  logger.info(
+    `Cleared stale running state for thread '${threadState.id}' before user message handling because SDK turn '${threadState.currentSdkTurnId}' is no longer in progress.`,
+  );
+  return {
+    ...threadState,
+    sdkThreadId: resumeResult.thread.id,
+    isCurrentTurnRunning: false,
+  };
 }
 
 async function listTrackedThreadWorkspaces(cfg: Config, logger: Logger): Promise<string[]> {
@@ -2608,12 +2790,7 @@ async function executeCreateUserMessageRequest(
     logger,
   );
   const appServer = appServerSession.appServer;
-  const runtimeUser = {
-    uid: threadState.uid,
-    gid: threadState.gid,
-    agentUser: cfg.agent_user,
-    agentHomeDirectory: threadState.homeDirectory,
-  };
+  const runtimeUser = buildThreadRuntimeUser(cfg, threadState);
 
   let sdkThreadId = threadState.sdkThreadId;
   let sdkTurnId = threadState.currentSdkTurnId;
@@ -2855,6 +3032,10 @@ async function handleCreateUserMessageRequest(
     if (!threadState) {
       await sendRequestError(commandChannel, `Thread '${request.threadId}' does not exist.`, requestId);
       return;
+    }
+
+    if (threadState.isCurrentTurnRunning && !request.allowSteer) {
+      threadState = await reconcileThreadRunningStateBeforeUserMessage(cfg, threadState, logger);
     }
 
     if (!request.allowSteer && threadState.isCurrentTurnRunning) {
@@ -3202,6 +3383,7 @@ export async function runRootCommand(
     maxBufferedEvents: cfg.client_message_buffer_limit,
     logger,
   });
+  await reconcileTrackedRunningThreadsOnStartup(cfg, logger);
   let reconnectAttempt = 0;
   let activeApiClient: CompanyhelmApiClient | null = null;
   let activeCommandChannel: CompanyhelmCommandChannel | null = null;
