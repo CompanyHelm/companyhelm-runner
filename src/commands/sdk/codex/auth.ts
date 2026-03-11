@@ -80,7 +80,8 @@ export function ensureDockerAvailable(spawnSyncCommand: typeof spawnSync): void 
 }
 
 export function extractCodexDeviceCodeFromOutput(output: string): string | null {
-  const match = output.match(/Enter this one-time code[\s\S]*?\n\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)\s*(?:\n|$)/i);
+  const normalizedOutput = output.replace(/\u001b\[[0-9;]*m/g, "");
+  const match = normalizedOutput.match(/Enter this one-time code[\s\S]*?\n\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)\s*(?:\n|$)/i);
   return match?.[1]?.trim() ?? null;
 }
 
