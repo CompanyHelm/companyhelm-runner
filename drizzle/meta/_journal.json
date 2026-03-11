@@ -85,6 +85,13 @@
       "when": 1772775000000,
       "tag": "0011_actual_lucky",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1773255703485,
+      "tag": "0012_magenta_chameleon",
+      "breakpoints": true
     }
   ]
 }

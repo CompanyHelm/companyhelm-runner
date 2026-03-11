@@ -7,6 +7,7 @@ export const agentSdks = sqliteTable("agent_sdks", {
   authentication: text("authentication", {
     enum: ["unauthenticated", "host", "dedicated", "api-key"],
   }).notNull(),
+  status: text("status", { enum: ["unconfigured", "configured"] }).notNull(),
 });
 
 // ── llm_models ──────────────────────────────────────────────────────────────
