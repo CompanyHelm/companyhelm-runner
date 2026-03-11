@@ -23,7 +23,7 @@ function createTempStateDbPath(): { rootDir: string; stateDbPath: string } {
 async function seedThread(stateDbPath: string, threadId: string): Promise<void> {
   const { db, client } = await initDb(stateDbPath);
   try {
-    await db.insert(agentSdks).values({ name: "codex", authentication: "host" });
+    await db.insert(agentSdks).values({ name: "codex", authentication: "host", status: "configured" });
     await db.insert(llmModels).values({ name: "gpt-5", sdkName: "codex", reasoningLevels: ["high"] });
     await db.insert(threads).values({
       id: threadId,

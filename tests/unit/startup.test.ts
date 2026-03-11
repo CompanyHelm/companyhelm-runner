@@ -176,18 +176,50 @@ test("startup skips auth selection prompt when only dedicated auth is available"
         return [{ modelCount: 0 }];
       },
       spawnCommand: (() => ({
+        stdout: {
+          on() {
+            return undefined;
+          },
+        },
+        stderr: {
+          on() {
+            return undefined;
+          },
+        },
         on() {
           return undefined;
         },
       })) as any,
-      spawnSyncCommand: (() => ({
-        status: 0,
-        signal: null,
-        output: [],
-        pid: 0,
-        stdout: "/home/agent/.codex/auth.json",
-        stderr: "",
-      })) as any,
+      spawnSyncCommand: ((command: string, args: string[]) => {
+        if (command === "docker" && args[0] === "cp") {
+          return {
+            status: 0,
+            signal: null,
+            output: [],
+            pid: 0,
+            stdout: "",
+            stderr: "",
+          };
+        }
+        if (command === "docker" && args[0] === "exec") {
+          return {
+            status: 0,
+            signal: null,
+            output: [],
+            pid: 0,
+            stdout: "",
+            stderr: "",
+          };
+        }
+        return {
+          status: 0,
+          signal: null,
+          output: [],
+          pid: 0,
+          stdout: "",
+          stderr: "",
+        };
+      }) as any,
     },
   );
 
