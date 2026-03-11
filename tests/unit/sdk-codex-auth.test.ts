@@ -339,3 +339,20 @@ Follow these steps to sign in with ChatGPT using device code authorization:
 
   assert.equal(extractCodexDeviceCodeFromOutput(output), "R2OU-ZVJKU");
 });
+
+test("extractCodexDeviceCodeFromOutput handles ANSI-colored Codex login output", () => {
+  const output = `
+Welcome to Codex [v\u001b[90m0.110.0\u001b[0m]
+\u001b[90mOpenAI's command-line coding agent\u001b[0m
+
+Follow these steps to sign in with ChatGPT using device code authorization:
+
+1. Open this link in your browser and sign in to your account
+   \u001b[94mhttps://auth.openai.com/codex/device\u001b[0m
+
+2. Enter this one-time code \u001b[90m(expires in 15 minutes)\u001b[0m
+   \u001b[94mR3YV-AJ0YQ\u001b[0m
+`;
+
+  assert.equal(extractCodexDeviceCodeFromOutput(output), "R3YV-AJ0YQ");
+});
