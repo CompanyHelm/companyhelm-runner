@@ -9,6 +9,8 @@ import { agentSdks } from "../../../state/schema.js";
 import { expandHome } from "../../../utils/path.js";
 
 export type CodexAuthMode = "dedicated" | "host";
+export type CodexAuthentication = "unauthenticated" | "host" | "dedicated" | "api-key";
+export type CodexConfigurationStatus = "unconfigured" | "configured";
 
 export type CodexAuthOption = {
   value: CodexAuthMode;
@@ -19,6 +21,11 @@ export type CodexAuthOption = {
 export type SetCodexHostAuthDependencies = {
   getHostInfoFn: typeof getHostInfo;
   initDbFn: typeof initDb;
+};
+
+export type EnsureCodexRunnerStartStateDependencies = SetCodexHostAuthDependencies & {
+  logInfo: (message: string) => void;
+  useDedicatedAuth?: boolean;
 };
 
 export type DedicatedCodexAuthDependencies = {
@@ -37,12 +44,24 @@ export const defaultSetCodexHostAuthDependencies: SetCodexHostAuthDependencies =
   initDbFn: initDb,
 };
 
+export const defaultEnsureCodexRunnerStartStateDependencies: EnsureCodexRunnerStartStateDependencies = {
+  ...defaultSetCodexHostAuthDependencies,
+  logInfo: () => undefined,
+  useDedicatedAuth: false,
+};
+
 export const defaultUseDedicatedCodexAuthDependencies: UseDedicatedCodexAuthDependencies = {
   initDbFn: initDb,
   logInfo: console.log,
   logSuccess: console.log,
   spawnCommand: spawn,
   spawnSyncCommand: spawnSync,
+};
+
+type ContainerizedCodexLoginOptions = {
+  containerName: string;
+  dockerArgs: string[];
+  onOutput?: (output: string) => void;
 };
 
 export function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
@@ -58,6 +77,121 @@ export function ensureDockerAvailable(spawnSyncCommand: typeof spawnSync): void 
   if (isErrnoException(result.error) && result.error.code === "ENOENT") {
     throw buildDockerMissingError();
   }
+}
+
+export function extractCodexDeviceCodeFromOutput(output: string): string | null {
+  const match = output.match(/Enter this one-time code[\s\S]*?\n\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)\s*(?:\n|$)/i);
+  return match?.[1]?.trim() ?? null;
+}
+
+async function runContainerizedCodexLogin(
+  cfg: Config,
+  deps: DedicatedCodexAuthDependencies,
+  options: ContainerizedCodexLoginOptions,
+): Promise<string> {
+  ensureDockerAvailable(deps.spawnSyncCommand);
+  const configDir = expandHome(cfg.config_directory);
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
+  }
+  const destPath = join(configDir, cfg.codex.codex_auth_file_path);
+  const containerAuthPath = cfg.codex.codex_auth_path;
+
+  let authCopied = false;
+  let combinedOutput = "";
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let poll: NodeJS.Timeout | undefined;
+
+    const cleanup = () => {
+      if (poll) {
+        clearInterval(poll);
+      }
+      deps.spawnSyncCommand("docker", ["rm", "-f", options.containerName], { stdio: "ignore" });
+    };
+
+    const tryCopyAuthFile = (): boolean => {
+      const check = deps.spawnSyncCommand("docker", ["exec", options.containerName, "sh", "-c", `test -f ${containerAuthPath}`], {
+        stdio: "ignore",
+      });
+      if (check.status !== 0) {
+        return false;
+      }
+
+      const cpResult = deps.spawnSyncCommand("docker", ["cp", `${options.containerName}:${containerAuthPath}`, destPath], {
+        stdio: "ignore",
+      });
+      if (cpResult.status !== 0) {
+        return false;
+      }
+
+      authCopied = true;
+      cleanup();
+      return true;
+    };
+
+    const rejectOnce = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+
+    const resolveOnce = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const child = deps.spawnCommand("docker", options.dockerArgs, { stdio: ["ignore", "pipe", "pipe"] });
+
+    const handleOutput = (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      combinedOutput += text;
+      options.onOutput?.(combinedOutput);
+    };
+
+    child.stdout.on("data", handleOutput);
+    child.stderr.on("data", handleOutput);
+
+    child.on("error", (error) => {
+      if (isErrnoException(error) && error.code === "ENOENT") {
+        rejectOnce(buildDockerMissingError());
+        return;
+      }
+
+      rejectOnce(new Error(`Failed to start Codex login container: ${error.message}`));
+    });
+
+    poll = setInterval(() => {
+      if (settled) {
+        return;
+      }
+      if (tryCopyAuthFile()) {
+        resolveOnce();
+      }
+    }, 1000);
+
+    child.on("exit", () => {
+      if (authCopied) {
+        resolveOnce();
+        return;
+      }
+      if (tryCopyAuthFile()) {
+        resolveOnce();
+        return;
+      }
+      rejectOnce(new Error(`Codex login failed or was cancelled.${combinedOutput.trim().length > 0 ? ` Output: ${combinedOutput.trim()}` : ""}`));
+    });
+  });
+
+  return destPath;
 }
 
 export function listCodexStartupAuthOptions(
@@ -84,30 +218,70 @@ export function listCodexStartupAuthOptions(
   return options;
 }
 
-export async function setCodexHostAuthInDb(db: any): Promise<void> {
+async function upsertCodexSdkState(
+  db: any,
+  authentication: CodexAuthentication,
+  status: CodexConfigurationStatus,
+): Promise<void> {
   const existingSdk = await db.select().from(agentSdks).where(eq(agentSdks.name, "codex")).get();
   if (existingSdk) {
     await db
       .update(agentSdks)
-      .set({ authentication: "host" })
+      .set({ authentication, status })
       .where(eq(agentSdks.name, "codex"));
     return;
   }
 
-  await db.insert(agentSdks).values({ name: "codex", authentication: "host" });
+  await db.insert(agentSdks).values({ name: "codex", authentication, status });
+}
+
+export async function setCodexHostAuthInDb(db: any): Promise<void> {
+  await upsertCodexSdkState(db, "host", "configured");
 }
 
 export async function setCodexDedicatedAuthInDb(db: any): Promise<void> {
-  const existingSdk = await db.select().from(agentSdks).where(eq(agentSdks.name, "codex")).get();
-  if (existingSdk) {
-    await db
-      .update(agentSdks)
-      .set({ authentication: "dedicated" })
-      .where(eq(agentSdks.name, "codex"));
-    return;
-  }
+  await upsertCodexSdkState(db, "dedicated", "configured");
+}
 
-  await db.insert(agentSdks).values({ name: "codex", authentication: "dedicated" });
+export async function setCodexApiKeyAuthInDb(db: any): Promise<void> {
+  await upsertCodexSdkState(db, "api-key", "configured");
+}
+
+export async function setCodexUnconfiguredInDb(db: any): Promise<void> {
+  await upsertCodexSdkState(db, "unauthenticated", "unconfigured");
+}
+
+export async function ensureCodexRunnerStartState(
+  cfg: Config,
+  overrides: Partial<EnsureCodexRunnerStartStateDependencies> = {},
+): Promise<void> {
+  const deps: EnsureCodexRunnerStartStateDependencies = {
+    ...defaultEnsureCodexRunnerStartStateDependencies,
+    ...overrides,
+  };
+  const { db, client } = await deps.initDbFn(cfg.state_db_path);
+
+  try {
+    const existingSdk = await db.select().from(agentSdks).where(eq(agentSdks.name, "codex")).get();
+    if (deps.useDedicatedAuth) {
+      if (existingSdk?.authentication === "dedicated" && existingSdk.status === "configured") {
+        return;
+      }
+      await setCodexUnconfiguredInDb(db);
+      return;
+    }
+
+    const hostInfo = deps.getHostInfoFn(cfg.codex.codex_auth_path);
+    if (hostInfo.codexAuthExists) {
+      deps.logInfo(`Detected Codex host auth at ${expandHome(cfg.codex.codex_auth_path)}; using host auth automatically.`);
+      await setCodexHostAuthInDb(db);
+      return;
+    }
+
+    await setCodexUnconfiguredInDb(db);
+  } finally {
+    client.close();
+  }
 }
 
 export async function runSetCodexHostAuth(
@@ -137,119 +311,104 @@ export async function runDedicatedCodexAuth(
   db: any,
   deps: DedicatedCodexAuthDependencies,
 ): Promise<string> {
-  ensureDockerAvailable(deps.spawnSyncCommand);
-  const port = cfg.codex.codex_auth_port;
-  const socatPort = port + 1;
   const containerName = `companyhelm-codex-auth-${Date.now()}`;
 
   deps.logInfo("Starting Codex login inside a container...");
-  deps.logInfo("A browser URL will appear -- open it to complete authentication.");
-
-  const configDir = expandHome(cfg.config_directory);
-  if (!existsSync(configDir)) {
-    mkdirSync(configDir, { recursive: true });
-  }
-  const destPath = join(configDir, cfg.codex.codex_auth_file_path);
-
-  let authCopied = false;
-
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let poll: NodeJS.Timeout | undefined;
-
-    const rejectOnce = (error: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (poll) {
-        clearInterval(poll);
-      }
-      deps.spawnSyncCommand("docker", ["rm", "-f", containerName], { stdio: "ignore" });
-      reject(error);
-    };
-
-    const resolveOnce = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (poll) {
-        clearInterval(poll);
-      }
-      resolve();
-    };
-
-    const child = deps.spawnCommand(
-      "docker",
-      [
-        "run",
-        "-it",
-        "--name",
-        containerName,
-        "-p",
-        `${port}:${socatPort}`,
-        "--entrypoint",
-        "bash",
-        cfg.runtime_image,
-        "-c",
-        `source "$NVM_DIR/nvm.sh"; socat TCP-LISTEN:${socatPort},fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:${port} 2>/dev/null & codex`,
-      ],
-      { stdio: "inherit" },
-    );
-
-    child.on("error", (error) => {
-      if (isErrnoException(error) && error.code === "ENOENT") {
-        rejectOnce(buildDockerMissingError());
-        return;
-      }
-
-      rejectOnce(new Error(`Failed to start Codex login container: ${error.message}`));
-    });
-
-    poll = setInterval(() => {
-      if (settled) {
-        return;
-      }
-      const check = deps.spawnSyncCommand("docker", ["exec", containerName, "sh", "-c", `test -f ${cfg.codex.codex_auth_path}`], {
-        stdio: "ignore",
-      });
-
-      if (check.status === 0) {
-        const resolveResult = deps.spawnSyncCommand(
-          "docker",
-          ["exec", containerName, "sh", "-c", `echo ${cfg.codex.codex_auth_path}`],
-          {
-            encoding: "utf-8",
-          },
-        );
-        const containerAuthAbsPath = resolveResult.stdout.trim();
-
-        const cpResult = deps.spawnSyncCommand("docker", ["cp", `${containerName}:${containerAuthAbsPath}`, destPath], {
-          stdio: "ignore",
-        });
-
-        if (cpResult.status !== 0) {
-          rejectOnce(new Error("Failed to extract auth file from container."));
-          return;
-        }
-
-        authCopied = true;
-        deps.spawnSyncCommand("docker", ["rm", "-f", containerName], { stdio: "ignore" });
-        resolveOnce();
-      }
-    }, 1000);
-
-    child.on("exit", () => {
-      if (!authCopied) {
-        rejectOnce(new Error("Codex login failed or was cancelled."));
-      }
-    });
+  deps.logInfo("A browser URL and device code will appear -- open it to complete authentication.");
+  const destPath = await runContainerizedCodexLogin(cfg, deps, {
+    containerName,
+    dockerArgs: [
+      "run",
+      "--name",
+      containerName,
+      "--entrypoint",
+      "bash",
+      cfg.runtime_image,
+      "-lc",
+      'source "$NVM_DIR/nvm.sh"; codex login --device-auth',
+    ],
   });
 
   await setCodexDedicatedAuthInDb(db);
   deps.logSuccess(`Codex auth saved to ${destPath}`);
   return destPath;
+}
+
+export async function runCodexApiKeyAuth(
+  cfg: Config,
+  apiKey: string,
+  overrides: Partial<UseDedicatedCodexAuthDependencies> = {},
+): Promise<string> {
+  const deps: UseDedicatedCodexAuthDependencies = { ...defaultUseDedicatedCodexAuthDependencies, ...overrides };
+  const { db, client } = await deps.initDbFn(cfg.state_db_path);
+
+  try {
+    deps.logInfo("Starting Codex API key login inside a container...");
+    const containerName = `companyhelm-codex-auth-${Date.now()}`;
+    const destPath = await runContainerizedCodexLogin(cfg, deps, {
+      containerName,
+      dockerArgs: [
+        "run",
+        "--name",
+        containerName,
+        "-e",
+        `CODEX_API_KEY=${apiKey}`,
+        "--entrypoint",
+        "bash",
+        cfg.runtime_image,
+        "-lc",
+        'source "$NVM_DIR/nvm.sh"; printf \'%s\\n\' "$CODEX_API_KEY" | codex login --with-api-key',
+      ],
+    });
+    await setCodexApiKeyAuthInDb(db);
+    deps.logSuccess(`Codex auth saved to ${destPath}`);
+    return destPath;
+  } finally {
+    client.close();
+  }
+}
+
+export async function runCodexDeviceCodeAuth(
+  cfg: Config,
+  onDeviceCode: (deviceCode: string) => Promise<void> | void,
+  overrides: Partial<UseDedicatedCodexAuthDependencies> = {},
+): Promise<string> {
+  const deps: UseDedicatedCodexAuthDependencies = { ...defaultUseDedicatedCodexAuthDependencies, ...overrides };
+  const { db, client } = await deps.initDbFn(cfg.state_db_path);
+
+  try {
+    let emittedDeviceCode: string | null = null;
+    let onDeviceCodePromise: Promise<void> = Promise.resolve();
+    deps.logInfo("Starting Codex device login inside a container...");
+    const containerName = `companyhelm-codex-auth-${Date.now()}`;
+    const destPath = await runContainerizedCodexLogin(cfg, deps, {
+      containerName,
+      dockerArgs: [
+        "run",
+        "--name",
+        containerName,
+        "--entrypoint",
+        "bash",
+        cfg.runtime_image,
+        "-lc",
+        'source "$NVM_DIR/nvm.sh"; codex login --device-auth',
+      ],
+      onOutput: (output) => {
+        const deviceCode = extractCodexDeviceCodeFromOutput(output);
+        if (!deviceCode || emittedDeviceCode === deviceCode) {
+          return;
+        }
+        emittedDeviceCode = deviceCode;
+        onDeviceCodePromise = Promise.resolve(onDeviceCode(deviceCode));
+      },
+    });
+    await onDeviceCodePromise;
+    await setCodexDedicatedAuthInDb(db);
+    deps.logSuccess(`Codex auth saved to ${destPath}`);
+    return destPath;
+  } finally {
+    client.close();
+  }
 }
 
 export async function runUseDedicatedCodexAuth(

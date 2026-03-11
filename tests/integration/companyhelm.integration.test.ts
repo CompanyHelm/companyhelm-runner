@@ -183,6 +183,7 @@ async function seedStateDatabase(homeDirectory: string, options?: SeedStateDatab
     await db.insert(agentSdks).values({
       name: "codex",
       authentication: "host",
+      status: "configured",
     });
 
     await db.insert(llmModels).values({
@@ -236,6 +237,7 @@ async function seedStateDatabaseWithoutModels(
     await db.insert(agentSdks).values({
       name: "codex",
       authentication,
+      status: "configured",
     });
   } finally {
     client.close();
@@ -620,52 +622,108 @@ test("companyhelm root command forwards --secret as authorization metadata", asy
   }
 });
 
-test("companyhelm runner start in daemon mode fails when no sdk is configured", async () => {
-  const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-daemon-no-sdk-");
+test("companyhelm root command registers codex as unconfigured when no auth is configured", async () => {
+  const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-register-unconfigured-");
+  let server: grpc.Server | undefined;
+  const previousHome = process.env.HOME;
+  const reconnectStopError = new Error("stop root command after unconfigured registration validation");
+  let shouldStopAfterValidation = false;
+  const nativeSetTimeout = global.setTimeout;
+  const reconnectDelaySpy = vi.spyOn(global, "setTimeout").mockImplementation(((handler: any, timeout?: any, ...args: any[]) => {
+    if (shouldStopAfterValidation && timeout === 1_000) {
+      throw reconnectStopError;
+    }
+    return nativeSetTimeout(handler, timeout as any, ...args);
+  }) as typeof global.setTimeout);
 
   try {
-    const repositoryRoot = path.resolve(__dirname, "../..");
-    const cliEntryPoint = path.join(repositoryRoot, "dist", "cli.js");
-    const result = await waitForExit(
-      spawn(process.execPath, [cliEntryPoint, "runner", "start", "-d", "--server-url", "127.0.0.1:65535/grpc"], {
-        cwd: repositoryRoot,
-        env: { ...process.env, HOME: homeDirectory },
-        stdio: ["ignore", "pipe", "pipe"],
+    process.env.HOME = homeDirectory;
+
+    let registerRequest: any = null;
+    const started = await startFakeServer("/grpc", {
+      registerRunner(call, callback) {
+        registerRequest = call.request;
+        callback(null, create(RegisterRunnerResponseSchema, {}));
+      },
+      controlChannel(call) {
+        shouldStopAfterValidation = true;
+        call.sendMetadata(new grpc.Metadata());
+        call.end();
+      },
+    });
+    server = started.server;
+
+    await assert.rejects(
+      runRootCommand({
+        serverUrl: `127.0.0.1:${started.port}/grpc`,
       }),
+      (error: unknown) => error === reconnectStopError,
+      "expected root command to stop after unconfigured registration validation",
     );
 
-    assert.notEqual(result.code, 0, `CLI unexpectedly succeeded. stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-    assert.match(
-      `${result.stdout}\n${result.stderr}`,
-      /No SDKs configured\. Daemon mode requires at least one configured SDK\./,
-    );
+    assert.equal(registerRequest?.agentSdks?.[0]?.name, "codex");
+    assert.equal(registerRequest?.agentSdks?.[0]?.status, 1);
+    assert.deepEqual(registerRequest?.agentSdks?.[0]?.models ?? [], []);
   } finally {
+    reconnectDelaySpy.mockRestore();
+    if (server) {
+      await shutdownServer(server);
+    }
+    process.env.HOME = previousHome;
     await rm(homeDirectory, { recursive: true, force: true });
   }
 });
 
-test("companyhelm runner start fails when model refresh fails and no cached models exist", async () => {
-  const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-daemon-no-cached-models-");
+test("companyhelm root command registers codex as error when configured model refresh fails", async () => {
+  const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-register-error-status-");
+  let server: grpc.Server | undefined;
+  const previousHome = process.env.HOME;
+  const reconnectStopError = new Error("stop root command after error registration validation");
+  let shouldStopAfterValidation = false;
+  const nativeSetTimeout = global.setTimeout;
+  const reconnectDelaySpy = vi.spyOn(global, "setTimeout").mockImplementation(((handler: any, timeout?: any, ...args: any[]) => {
+    if (shouldStopAfterValidation && timeout === 1_000) {
+      throw reconnectStopError;
+    }
+    return nativeSetTimeout(handler, timeout as any, ...args);
+  }) as typeof global.setTimeout);
 
   try {
-    const repositoryRoot = path.resolve(__dirname, "../..");
-    const cliEntryPoint = path.join(repositoryRoot, "dist", "cli.js");
+    process.env.HOME = homeDirectory;
     await seedStateDatabaseWithoutModels(homeDirectory, "dedicated");
 
-    const result = await waitForExit(
-      spawn(process.execPath, [cliEntryPoint, "runner", "start", "--server-url", "127.0.0.1:65535/grpc"], {
-        cwd: repositoryRoot,
-        env: { ...process.env, HOME: homeDirectory },
-        stdio: ["ignore", "pipe", "pipe"],
+    let registerRequest: any = null;
+    const started = await startFakeServer("/grpc", {
+      registerRunner(call, callback) {
+        registerRequest = call.request;
+        callback(null, create(RegisterRunnerResponseSchema, {}));
+      },
+      controlChannel(call) {
+        shouldStopAfterValidation = true;
+        call.sendMetadata(new grpc.Metadata());
+        call.end();
+      },
+    });
+    server = started.server;
+
+    await assert.rejects(
+      runRootCommand({
+        serverUrl: `127.0.0.1:${started.port}/grpc`,
+        useDedicatedAuth: true,
       }),
+      (error: unknown) => error === reconnectStopError,
+      "expected root command to stop after error registration validation",
     );
 
-    assert.notEqual(result.code, 0, `CLI unexpectedly succeeded. stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-    assert.match(
-      `${result.stdout}\n${result.stderr}`,
-      /Runner startup aborted because no cached Codex models are available; refusing to register zero models\./,
-    );
+    assert.equal(registerRequest?.agentSdks?.[0]?.name, "codex");
+    assert.equal(registerRequest?.agentSdks?.[0]?.status, 3);
+    assert.match(String(registerRequest?.agentSdks?.[0]?.errorMessage ?? ""), /Failed to refresh codex models/i);
   } finally {
+    reconnectDelaySpy.mockRestore();
+    if (server) {
+      await shutdownServer(server);
+    }
+    process.env.HOME = previousHome;
     await rm(homeDirectory, { recursive: true, force: true });
   }
 });
@@ -1215,6 +1273,7 @@ test("companyhelm root command returns requestError for createThreadRequest when
   try {
     process.env.HOME = homeDirectory;
     await seedStateDatabase(homeDirectory);
+    await writeHostAuthFile(homeDirectory);
 
     let receivedClientUpdate: any = null;
     const requestId = "request-missing-model-create-thread";

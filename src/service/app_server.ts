@@ -4,6 +4,8 @@ import type { ThreadResumeParams } from "../generated/codex-app-server/v2/Thread
 import type { ThreadResumeResponse } from "../generated/codex-app-server/v2/ThreadResumeResponse.js";
 import type { ThreadReadParams } from "../generated/codex-app-server/v2/ThreadReadParams.js";
 import type { ThreadReadResponse } from "../generated/codex-app-server/v2/ThreadReadResponse.js";
+import type { LoginAccountParams } from "../generated/codex-app-server/v2/LoginAccountParams.js";
+import type { LoginAccountResponse } from "../generated/codex-app-server/v2/LoginAccountResponse.js";
 import type { ThreadStartParams } from "../generated/codex-app-server/v2/ThreadStartParams.js";
 import type { ThreadStartResponse } from "../generated/codex-app-server/v2/ThreadStartResponse.js";
 import type { TurnInterruptParams } from "../generated/codex-app-server/v2/TurnInterruptParams.js";
@@ -222,6 +224,10 @@ export class AppServerService {
 
   async readThread(params: ThreadReadParams): Promise<ThreadReadResponse> {
     return this.request<ThreadReadResponse>("thread/read", params, 15_000);
+  }
+
+  async loginAccount(params: LoginAccountParams): Promise<LoginAccountResponse> {
+    return this.request<LoginAccountResponse>("account/login/start", params, 15_000);
   }
 
   async startTurn(params: TurnStartParams): Promise<TurnStartResponse> {

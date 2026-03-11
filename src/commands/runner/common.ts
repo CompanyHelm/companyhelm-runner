@@ -11,6 +11,7 @@ export interface RunnerStartCommandOptions {
   secret?: string;
   stateDbPath?: string;
   useHostDockerRuntime?: boolean;
+  useDedicatedAuth?: boolean;
   hostDockerPath?: string;
   threadGitSkillsDirectory?: string;
 }
@@ -33,6 +34,10 @@ export function addRunnerStartOptions(command: Command): Command {
     .option(
       "--use-host-docker-runtime",
       "Mount host Docker socket into runtime containers instead of creating DinD sidecars.",
+    )
+    .option(
+      "--use-dedicated-auth",
+      "Preserve existing dedicated Codex auth if already configured; otherwise keep Codex unconfigured on startup.",
     )
     .option(
       "--host-docker-path <path>",
