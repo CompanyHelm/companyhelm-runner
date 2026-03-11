@@ -283,6 +283,27 @@ test("AppServerService forwards notifications that arrive shortly after turn com
   await service.stop();
 });
 
+test("AppServerService can start account login with an API key", async () => {
+  const transport = new FakeTransport();
+  const service = new AppServerService(transport as any, "test-client");
+
+  await service.start();
+
+  const loginPromise = (service as any).loginAccount({
+    type: "apiKey",
+    apiKey: "sk-test",
+  });
+
+  const loginRequestId = await waitForRequestId(transport, "account/login/start");
+  transport.emitJson({
+    id: loginRequestId,
+    result: { type: "apiKey" },
+  });
+
+  assert.deepEqual(await loginPromise, { type: "apiKey" });
+  await service.stop();
+});
+
 test("AppServerService includes thread context in app-server debug logs", async () => {
   const transport = new FakeTransport();
   const debugLogs: string[] = [];

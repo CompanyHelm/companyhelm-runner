@@ -1,5 +1,7 @@
 import { create } from "@bufbuild/protobuf";
 import {
+  AgentSdkStatus,
+  CodexAuthType,
   ItemStatus,
   ItemType,
   ClientMessageSchema,
@@ -10,6 +12,7 @@ import {
   type DeleteThreadRequest,
   type InterruptTurnRequest,
   type ClientMessage,
+  type AgentSdk,
   type RegisterRunnerRequest,
   RegisterRunnerRequestSchema,
 } from "@companyhelm/protos";
@@ -20,7 +23,6 @@ import { createHash } from "node:crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config as configSchema, type Config } from "../config.js";
-import { startup } from "./startup.js";
 import {
   CompanyhelmApiClient,
   type CompanyhelmApiCallOptions,
@@ -78,6 +80,11 @@ import { expandHome } from "../utils/path.js";
 import { containsCtrlCInterruptInput, restoreInteractiveTerminalState } from "../utils/terminal.js";
 import { ensureWorkspaceAgentsMd } from "../service/workspace_agents.js";
 import type { RunnerStartCommandOptions } from "./runner/common.js";
+import {
+  ensureCodexRunnerStartState,
+  runCodexApiKeyAuth,
+  runCodexDeviceCodeAuth,
+} from "./sdk/codex/auth.js";
 
 export type RootCommandOptions = RunnerStartCommandOptions;
 
@@ -161,6 +168,13 @@ interface ThreadMcpServerConfig {
 interface ThreadCodexMcpSetup {
   configToml: string;
   appServerEnv: Record<string, string>;
+}
+
+interface RunnerRegistrationSdk {
+  name: string;
+  status: number;
+  errorMessage?: string;
+  models: Array<{ name: string; reasoning: string[] }>;
 }
 
 const threadAppServerSessions = new Map<string, ThreadAppServerSession>();
@@ -1977,6 +1991,38 @@ async function sendHeartbeatResponse(
   await commandChannel.send(message);
 }
 
+async function sendCodexDeviceCode(
+  commandChannel: ClientMessageSink,
+  deviceCode: string,
+  requestId?: string,
+): Promise<void> {
+  const message = create(ClientMessageSchema, {
+    requestId,
+    payload: {
+      case: "codexDeviceCode",
+      value: {
+        deviceCode,
+      },
+    },
+  }) as ClientMessage;
+  await commandChannel.send(message);
+}
+
+async function sendAgentSdkUpdate(
+  commandChannel: ClientMessageSink,
+  sdk: AgentSdk,
+  requestId?: string,
+): Promise<void> {
+  const message = create(ClientMessageSchema, {
+    requestId,
+    payload: {
+      case: "agentSdkUpdate",
+      value: sdk,
+    },
+  }) as ClientMessage;
+  await commandChannel.send(message);
+}
+
 async function sendThreadUpdate(
   commandChannel: ClientMessageSink,
   threadId: string,
@@ -2064,13 +2110,13 @@ async function sendItemExecutionUpdate(
   await commandChannel.send(message);
 }
 
-async function buildRegisterRunnerRequest(cfg: Config): Promise<RegisterRunnerRequest> {
+async function loadRunnerRegistrationSdks(cfg: Config, logger: Logger): Promise<RunnerRegistrationSdk[]> {
   const { db, client } = await initDb(cfg.state_db_path);
 
   try {
     const configuredSdks = await db.select().from(agentSdks).orderBy(agentSdks.name).all();
     if (configuredSdks.length === 0) {
-      throw new Error("No SDKs configured. Run startup before connecting to CompanyHelm API.");
+      return [];
     }
 
     const models = await db.select().from(llmModels).orderBy(llmModels.sdkName, llmModels.name).all();
@@ -2085,27 +2131,43 @@ async function buildRegisterRunnerRequest(cfg: Config): Promise<RegisterRunnerRe
       modelsBySdk.set(model.sdkName, sdkModels);
     }
 
-    return create(RegisterRunnerRequestSchema, {
-      agentSdks: configuredSdks.map((sdk) => ({
-        name: sdk.name,
-        models: modelsBySdk.get(sdk.name) ?? [],
-      })),
+    return configuredSdks.map((sdk) => {
+      if (sdk.name !== "codex") {
+        return {
+          name: sdk.name,
+          models: sdk.status === "configured" ? (modelsBySdk.get(sdk.name) ?? []) : [],
+          status: sdk.status === "configured" ? AgentSdkStatus.READY : AgentSdkStatus.UNCONFIGURED,
+        };
+      }
+
+      if (sdk.status !== "configured" || sdk.authentication === "unauthenticated") {
+        return {
+          name: sdk.name,
+          models: [],
+          status: AgentSdkStatus.UNCONFIGURED,
+        };
+      }
+
+      try {
+        logger.debug("Refreshing Codex models for runner registration.");
+        return {
+          name: sdk.name,
+          models: modelsBySdk.get(sdk.name) ?? [],
+          status: AgentSdkStatus.READY,
+        };
+      } catch (error: unknown) {
+        return {
+          name: sdk.name,
+          models: modelsBySdk.get(sdk.name) ?? [],
+          status: AgentSdkStatus.ERROR,
+          errorMessage: formatSdkModelRefreshFailure("codex", error),
+        };
+      }
     });
   } finally {
     client.close();
   }
 }
-
-async function hasConfiguredSdks(cfg: Config): Promise<boolean> {
-  const { db, client } = await initDb(cfg.state_db_path);
-  try {
-    const configuredSdks = await db.select().from(agentSdks).all();
-    return configuredSdks.length > 0;
-  } finally {
-    client.close();
-  }
-}
-
 async function countSdkModels(cfg: Config, sdkName: string): Promise<number> {
   const { db, client } = await initDb(cfg.state_db_path);
   try {
@@ -2116,25 +2178,73 @@ async function countSdkModels(cfg: Config, sdkName: string): Promise<number> {
   }
 }
 
-async function refreshCodexModelsForRegistration(cfg: Config, logger: Logger): Promise<void> {
+async function refreshCodexModelsForRegistration(cfg: Config, logger: Logger): Promise<string | null> {
+  const { db, client } = await initDb(cfg.state_db_path);
+  let codexSdk:
+    | { name: string; authentication: string; status: string }
+    | undefined;
+  try {
+    codexSdk = await db.select().from(agentSdks).where(eq(agentSdks.name, "codex")).get() ?? undefined;
+  } finally {
+    client.close();
+  }
+
+  if (!codexSdk || codexSdk.status !== "configured" || codexSdk.authentication === "unauthenticated") {
+    logger.info("Codex is not configured; registering runner with unconfigured Codex SDK state.");
+    return null;
+  }
+
   try {
     const results = await refreshSdkModels({ sdk: "codex", logger });
     const modelCount = results[0]?.modelCount ?? 0;
     logger.info(`Refreshed Codex models from container app-server (${modelCount} models).`);
+    return null;
   } catch (error: unknown) {
     const cachedModelCount = await countSdkModels(cfg, "codex");
     const failureMessage = formatSdkModelRefreshFailure("codex", error);
-
-    if (cachedModelCount === 0) {
-      throw new Error(
-        `${failureMessage} Runner startup aborted because no cached Codex models are available; refusing to register zero models.`,
+    if (cachedModelCount > 0) {
+      logger.warn(
+        `${failureMessage} Using ${cachedModelCount} cached Codex model(s) while registering Codex in error state.`,
       );
+    } else {
+      logger.warn(`${failureMessage} Registering Codex in error state with zero models.`);
     }
-
-    logger.warn(
-      `${failureMessage} Using ${cachedModelCount} cached Codex model(s) from local state instead of registering zero models.`,
-    );
+    return failureMessage;
   }
+}
+
+async function buildRegisterRunnerRequest(
+  cfg: Config,
+  logger: Logger,
+  codexRefreshErrorMessage?: string | null,
+): Promise<RegisterRunnerRequest> {
+  const sdks = await loadRunnerRegistrationSdks(cfg, logger);
+  return create(RegisterRunnerRequestSchema, {
+    agentSdks: sdks.map((sdk) => ({
+      name: sdk.name,
+      models: sdk.models,
+      status: sdk.name === "codex" && codexRefreshErrorMessage
+        ? AgentSdkStatus.ERROR
+        : sdk.status,
+      errorMessage: sdk.name === "codex" ? (codexRefreshErrorMessage ?? sdk.errorMessage) : sdk.errorMessage,
+    })),
+  });
+}
+
+async function buildCodexAgentSdkUpdate(
+  cfg: Config,
+  logger: Logger,
+  statusOverride?: number,
+  errorMessage?: string,
+): Promise<AgentSdk> {
+  const sdks = await loadRunnerRegistrationSdks(cfg, logger);
+  const codex = sdks.find((sdk) => sdk.name === "codex");
+  return {
+    name: "codex",
+    models: codex?.models ?? [],
+    status: statusOverride ?? codex?.status ?? AgentSdkStatus.UNCONFIGURED,
+    errorMessage: errorMessage ?? codex?.errorMessage,
+  } as AgentSdk;
 }
 
 async function resolveThreadAuthMode(cfg: Config): Promise<ThreadAuthMode> {
@@ -3098,6 +3208,56 @@ async function handleCreateUserMessageRequest(
   );
 }
 
+async function handleCodexConfigurationRequest(
+  cfg: Config,
+  commandChannel: ClientMessageSink,
+  request: { authType: CodexAuthType; codexApiKey?: string },
+  requestId: string | undefined,
+  logger: Logger,
+): Promise<void> {
+  try {
+    if (request.authType === CodexAuthType.API_KEY) {
+      const apiKey = String(request.codexApiKey ?? "").trim();
+      if (!apiKey) {
+        await sendRequestError(commandChannel, "Codex API key is required.", requestId);
+        return;
+      }
+      await runCodexApiKeyAuth(cfg, apiKey, {
+        logInfo: (message: string) => logger.info(message),
+        logSuccess: (message: string) => logger.info(message),
+      });
+    } else if (request.authType === CodexAuthType.DEVICE_CODE) {
+      await runCodexDeviceCodeAuth(
+        cfg,
+        async (deviceCode: string) => {
+          await sendCodexDeviceCode(commandChannel, deviceCode, requestId);
+        },
+        {
+          logInfo: (message: string) => logger.info(message),
+          logSuccess: (message: string) => logger.info(message),
+        },
+      );
+    } else {
+      await sendRequestError(commandChannel, "Unsupported Codex auth type.", requestId);
+      return;
+    }
+
+    const codexRefreshErrorMessage = await refreshCodexModelsForRegistration(cfg, logger);
+    const sdkUpdate = await buildCodexAgentSdkUpdate(
+      cfg,
+      logger,
+      codexRefreshErrorMessage ? AgentSdkStatus.ERROR : AgentSdkStatus.READY,
+      codexRefreshErrorMessage ?? undefined,
+    );
+    await sendAgentSdkUpdate(commandChannel, sdkUpdate, requestId);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const sdkUpdate = await buildCodexAgentSdkUpdate(cfg, logger, AgentSdkStatus.ERROR, message);
+    await sendAgentSdkUpdate(commandChannel, sdkUpdate, requestId);
+    await sendRequestError(commandChannel, message, requestId);
+  }
+}
+
 export async function runCommandLoop(
   cfg: Config,
   commandChannel: CompanyhelmCommandChannel,
@@ -3139,6 +3299,15 @@ export async function runCommandLoop(
         break;
       case "heartbeatRequest":
         await sendHeartbeatResponse(commandMessageSink, requestId);
+        break;
+      case "codexConfigurationRequest":
+        await handleCodexConfigurationRequest(
+          cfg,
+          commandMessageSink,
+          serverMessage.request.value,
+          requestId,
+          logger,
+        );
         break;
       default:
         break;
@@ -3361,19 +3530,13 @@ export async function runRootCommand(
 ): Promise<void> {
   const logger = createLogger(options.logLevel ?? "INFO", { daemonMode: options.daemon ?? false });
   const cfg = buildRootConfig(options);
+  await ensureCodexRunnerStartState(cfg, {
+    useDedicatedAuth: options.useDedicatedAuth,
+    logInfo: (message: string) => logger.info(message),
+  });
 
-  const configuredSdks = await hasConfiguredSdks(cfg);
-  if (!configuredSdks && options.daemon) {
-    throw new Error("No SDKs configured. Daemon mode requires at least one configured SDK.");
-  }
-
-  if (!configuredSdks) {
-    await startup(cfg);
-    restoreInteractiveTerminalState();
-  }
-
-  await refreshCodexModelsForRegistration(cfg, logger);
-  const registerRequest = await buildRegisterRunnerRequest(cfg);
+  const codexRefreshErrorMessage = await refreshCodexModelsForRegistration(cfg, logger);
+  const registerRequest = await buildRegisterRunnerRequest(cfg, logger, codexRefreshErrorMessage);
   const apiCallOptions = buildGrpcAuthCallOptions(options.secret);
   if (options.daemon) {
     await claimCurrentDaemonState(cfg.state_db_path, process.pid, resolveEffectiveDaemonLogPath(cfg));
