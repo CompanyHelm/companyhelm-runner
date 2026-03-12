@@ -1100,6 +1100,7 @@ test("companyhelm shell exposes interactive DB inspection commands", async () =>
     assert.match(result.stdout, /State DB: .*state\.db/);
     assert.match(result.stdout, /Available commands:/);
     assert.match(result.stdout, /Threads:/);
+    assert.match(result.stdout, /thread docker <id>/);
     assert.match(result.stdout, /"id": "thread-shell"/);
     assert.match(result.stdout, /"status": "ready"/);
     assert.match(result.stdout, /"sdkThreadId": "sdk-thread-shell"/);

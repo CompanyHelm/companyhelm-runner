@@ -1,11 +1,14 @@
+import * as p from "@clack/prompts";
 import type { Command } from "commander";
 import { eq } from "drizzle-orm";
 import { createInterface } from "node:readline";
 import { config as configSchema } from "../config.js";
+import { runThreadDockerCommand } from "./thread/docker.js";
 import { RUNNER_DAEMON_STATE_ID } from "../state/daemon_state.js";
 import { initDb } from "../state/db.js";
 import { daemonState, threads } from "../state/schema.js";
 import { addRunnerStartOptions } from "./runner/common.js";
+import { restoreInteractiveTerminalState } from "../utils/terminal.js";
 import { expandHome } from "../utils/path.js";
 
 const NON_OVERRIDABLE_DAEMON_OPTION_NAMES = new Set(["daemon", "serverUrl", "secret", "help"]);
@@ -16,6 +19,7 @@ const SHELL_HELP_TEXT = [
   "  list threads         List full thread rows from the state DB.",
   "  thread status <id>   Show the full thread row for one thread.",
   "  list containers      List thread container fields from the state DB.",
+  "  thread docker <id>   Docker exec bash into the selected thread runtime container.",
   "  show daemon          Show the daemon_state row from the state DB.",
   "  exit                 Exit the shell.",
 ].join("\n");
@@ -107,11 +111,20 @@ type ParsedShellCommand =
   | { type: "list-threads" }
   | { type: "thread-status"; threadId: string }
   | { type: "list-containers" }
+  | { type: "thread-docker-shell"; threadId: string }
   | { type: "show-daemon" }
   | { type: "exit" }
   | { type: "unknown"; input: string };
 
 type ShellDatabase = Awaited<ReturnType<typeof initDb>>["db"];
+type ShellMainAction =
+  | "list-threads"
+  | "thread-status"
+  | "list-containers"
+  | "thread-docker-shell"
+  | "show-daemon"
+  | "help"
+  | "exit";
 
 function jsonReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
@@ -189,7 +202,119 @@ export function parseShellCommand(input: string): ParsedShellCommand {
     return { type: "thread-status", threadId: tokens.slice(2).join(" ") };
   }
 
+  if (normalized.length >= 3 && normalized[0] === "thread" && normalized[1] === "docker") {
+    return { type: "thread-docker-shell", threadId: tokens.slice(2).join(" ") };
+  }
+
+  if (normalized.length >= 3 && normalized[0] === "docker" && normalized[1] === "shell") {
+    return { type: "thread-docker-shell", threadId: tokens.slice(2).join(" ") };
+  }
+
   return { type: "unknown", input: trimmed };
+}
+
+async function selectThreadId(
+  db: ShellDatabase,
+  message: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({
+      id: threads.id,
+      status: threads.status,
+      model: threads.model,
+    })
+    .from(threads)
+    .orderBy(threads.id)
+    .all();
+
+  if (rows.length === 0) {
+    p.log.warn("No threads found.");
+    return null;
+  }
+
+  const selection = await p.select<string>({
+    message,
+    options: rows.map((row) => ({
+      value: row.id,
+      label: row.id,
+      hint: `status=${row.status} model=${row.model}`,
+    })),
+  });
+
+  return p.isCancel(selection) ? null : selection;
+}
+
+async function promptShellAction(): Promise<ShellMainAction | null> {
+  const action = await p.select<ShellMainAction>({
+    message: "Choose shell action",
+    options: [
+      { value: "list-threads", label: "List threads" },
+      { value: "thread-status", label: "Thread status" },
+      { value: "list-containers", label: "List containers" },
+      { value: "thread-docker-shell", label: "Thread docker shell (bash)" },
+      { value: "show-daemon", label: "Show daemon state" },
+      { value: "help", label: "Show help" },
+      { value: "exit", label: "Exit shell" },
+    ],
+  });
+
+  return p.isCancel(action) ? null : action;
+}
+
+async function runClackShell(db: ShellDatabase, stateDbPath: string): Promise<void> {
+  p.intro(`CompanyHelm DB shell\n${expandHome(stateDbPath)}`);
+
+  try {
+    while (true) {
+      const action = await promptShellAction();
+      if (!action || action === "exit") {
+        p.outro("Shell closed.");
+        return;
+      }
+
+      try {
+        switch (action) {
+          case "help":
+            console.log(SHELL_HELP_TEXT);
+            break;
+          case "list-threads":
+            await runParsedShellCommand(db, { type: "list-threads" });
+            break;
+          case "thread-status": {
+            const threadId = await selectThreadId(db, "Select thread");
+            if (!threadId) {
+              break;
+            }
+
+            await runParsedShellCommand(db, { type: "thread-status", threadId });
+            break;
+          }
+          case "list-containers":
+            await runParsedShellCommand(db, { type: "list-containers" });
+            break;
+          case "thread-docker-shell": {
+            const threadId = await selectThreadId(db, "Select thread for docker bash");
+            if (!threadId) {
+              break;
+            }
+
+            restoreInteractiveTerminalState();
+            await runThreadDockerCommand({ threadId });
+            break;
+          }
+          case "show-daemon":
+            await runParsedShellCommand(db, { type: "show-daemon" });
+            break;
+          default:
+            break;
+        }
+      } catch (error: unknown) {
+        p.log.error(error instanceof Error ? error.message : String(error));
+      }
+    }
+  } finally {
+    restoreInteractiveTerminalState();
+  }
 }
 
 async function runParsedShellCommand(db: ShellDatabase, command: ParsedShellCommand): Promise<boolean> {
@@ -228,6 +353,10 @@ async function runParsedShellCommand(db: ShellDatabase, command: ParsedShellComm
       printRows("Containers", rows as Array<Record<string, unknown>>);
       return false;
     }
+    case "thread-docker-shell":
+      restoreInteractiveTerminalState();
+      await runThreadDockerCommand({ threadId: command.threadId });
+      return false;
     case "show-daemon": {
       const row = await db.select().from(daemonState).where(eq(daemonState.id, RUNNER_DAEMON_STATE_ID)).get();
       if (!row) {
@@ -255,34 +384,30 @@ export async function runShellCommand(options: ShellCommandOptions = {}): Promis
   });
   const { db, client } = await initDb(cfg.state_db_path);
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: interactive,
-    historySize: interactive ? 100 : 0,
-  });
 
   try {
+    if (interactive) {
+      await runClackShell(db, cfg.state_db_path);
+      return;
+    }
+
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: false,
+      historySize: 0,
+    });
+
     console.log(`State DB: ${expandHome(cfg.state_db_path)}`);
     console.log(SHELL_HELP_TEXT);
-
-    if (interactive) {
-      rl.setPrompt(SHELL_PROMPT);
-      rl.prompt();
-    }
 
     for await (const line of rl) {
       const shouldExit = await runParsedShellCommand(db, parseShellCommand(line));
       if (shouldExit) {
         break;
       }
-
-      if (interactive) {
-        rl.prompt();
-      }
     }
   } finally {
-    rl.close();
     client.close();
   }
 }
@@ -290,7 +415,7 @@ export async function runShellCommand(options: ShellCommandOptions = {}): Promis
 export function registerShellCommand(program: Command): void {
   program
     .command("shell")
-    .description("Open an interactive read-only shell for inspecting the local state database.")
+    .description("Open an interactive shell for inspecting local state and entering thread runtime containers.")
     .option("--state-db-path <path>", "State database path override (defaults to state.db under the active config directory).")
     .action(async (options: ShellCommandOptions) => {
       await runShellCommand(options);
