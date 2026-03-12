@@ -2178,16 +2178,19 @@ async function countSdkModels(cfg: Config, sdkName: string): Promise<number> {
   }
 }
 
-async function refreshCodexModelsForRegistration(cfg: Config, logger: Logger): Promise<string | null> {
+async function loadCodexSdkState(
+  cfg: Config,
+): Promise<{ name: string; authentication: string; status: string } | undefined> {
   const { db, client } = await initDb(cfg.state_db_path);
-  let codexSdk:
-    | { name: string; authentication: string; status: string }
-    | undefined;
   try {
-    codexSdk = await db.select().from(agentSdks).where(eq(agentSdks.name, "codex")).get() ?? undefined;
+    return await db.select().from(agentSdks).where(eq(agentSdks.name, "codex")).get() ?? undefined;
   } finally {
     client.close();
   }
+}
+
+async function refreshCodexModelsForRegistration(cfg: Config, logger: Logger): Promise<string | null> {
+  const codexSdk = await loadCodexSdkState(cfg);
 
   if (!codexSdk || codexSdk.status !== "configured" || codexSdk.authentication === "unauthenticated") {
     logger.info("Codex is not configured; registering runner with unconfigured Codex SDK state.");
@@ -3239,6 +3242,13 @@ async function handleCodexConfigurationRequest(
       );
     } else {
       await sendRequestError(commandChannel, "Unsupported Codex auth type.", requestId);
+      return;
+    }
+
+    const codexSdk = await loadCodexSdkState(cfg);
+    if (!codexSdk || codexSdk.status !== "configured" || codexSdk.authentication === "unauthenticated") {
+      const sdkUpdate = await buildCodexAgentSdkUpdate(cfg, logger, AgentSdkStatus.UNCONFIGURED);
+      await sendAgentSdkUpdate(commandChannel, sdkUpdate, requestId);
       return;
     }
 

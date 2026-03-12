@@ -84,6 +84,10 @@ test("runCommandLoop sends device code and ready sdk update for Codex device aut
   assert.equal(sentMessages[0]?.payload?.value?.deviceCode, "R2OU-ZVJKU");
   assert.equal(sentMessages[1]?.payload?.case, "agentSdkUpdate");
   assert.equal(sentMessages[1]?.payload?.value?.status, 2);
+  assert.deepEqual(
+    sentMessages[1]?.payload?.value?.models?.map((model: any) => ({ name: model.name, reasoning: model.reasoning })),
+    [{ name: "gpt-5.3-codex", reasoning: ["high"] }],
+  );
 });
 
 test("runCommandLoop sends ready sdk update for Codex API key auth requests", async () => {
@@ -147,4 +151,70 @@ test("runCommandLoop sends ready sdk update for Codex API key auth requests", as
   assert.equal(sentMessages.length, 1);
   assert.equal(sentMessages[0]?.payload?.case, "agentSdkUpdate");
   assert.equal(sentMessages[0]?.payload?.value?.status, 2);
+  assert.deepEqual(
+    sentMessages[0]?.payload?.value?.models?.map((model: any) => ({ name: model.name, reasoning: model.reasoning })),
+    [{ name: "gpt-5.3-codex", reasoning: ["high"] }],
+  );
+});
+
+test("runCommandLoop skips model refresh and sends unconfigured sdk update when Codex auth does not configure the sdk", async () => {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), "companyhelm-runner-root-unconfigured-"));
+  const stateDbPath = path.join(tempDirectory, "state.db");
+  const sentMessages: any[] = [];
+  let refreshCalls = 0;
+
+  const originalRunCodexApiKeyAuth = authModule.runCodexApiKeyAuth;
+  const originalRefreshSdkModels = refreshModelsModule.refreshSdkModels;
+
+  authModule.runCodexApiKeyAuth = async (_cfg: any, apiKey: string) => {
+    assert.equal(apiKey, "sk-live-test");
+    return "/tmp/codex-auth.json";
+  };
+  refreshModelsModule.refreshSdkModels = async () => {
+    refreshCalls += 1;
+    return [{ sdk: "codex", modelCount: 1 }];
+  };
+
+  try {
+    await runCommandLoop(
+      {
+        state_db_path: stateDbPath,
+        config_directory: tempDirectory,
+        codex: {
+          codex_auth_port: 1455,
+          codex_auth_file_path: "codex-auth.json",
+          codex_auth_path: "/home/agent/.codex/auth.json",
+        },
+      } as any,
+      createSingleMessageCommandChannel(
+        Object.assign(
+          create(ServerMessageSchema, {
+            request: {
+              case: "codexConfigurationRequest",
+              value: { authType: CodexAuthType.API_KEY, codexApiKey: "sk-live-test" },
+            },
+          }),
+          { requestId: "req-api-key-unconfigured" },
+        ),
+      ) as any,
+      {
+        async send(message: any) {
+          sentMessages.push(message);
+        },
+      },
+      {} as any,
+      undefined,
+      { info() {}, warn() {}, debug() {} } as any,
+    );
+  } finally {
+    authModule.runCodexApiKeyAuth = originalRunCodexApiKeyAuth;
+    refreshModelsModule.refreshSdkModels = originalRefreshSdkModels;
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+
+  assert.equal(refreshCalls, 0);
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0]?.payload?.case, "agentSdkUpdate");
+  assert.equal(sentMessages[0]?.payload?.value?.status, 1);
+  assert.deepEqual(sentMessages[0]?.payload?.value?.models, []);
 });
