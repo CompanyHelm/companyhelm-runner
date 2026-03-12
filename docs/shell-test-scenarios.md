@@ -1,69 +1,85 @@
 # CompanyHelm CLI Shell Test Scenarios
 
-**Purpose:** This document is a shared QA reference for manually testing the `shell` command behavior in CompanyHelm CLI.
+**Purpose:** This document is a shared QA reference for manually testing the interactive `shell` command in CompanyHelm Runner.
 
-**Audience:** QA testers, CLI maintainers, and reviewers validating shell command behavior and shell-related option handling.
+**Audience:** QA testers, CLI maintainers, and reviewers validating state DB inspection behavior.
 
 **Preconditions:**
 - Node.js version supported by the repo is installed.
-- Testers have access to an environment where SDK configuration can be controlled.
+- A state DB exists, or the tester is comfortable inspecting an empty DB shell.
 
 ---
 
-## 1. Shell Command Behavior
+## 1. Shell Startup
 
-### Scenario 1.1: Shell command fails with the current unsupported interactive-shell message
-
-**Steps:**
-1. Run the `shell` command in an environment where SDK prerequisites are already configured.
-
-**Expected Results:**
-- The command does not pretend to start a usable shell.
-- The CLI returns the explicit unsupported-shell error.
-- The error tells the user to use the daemon mode entrypoint.
-
-### Scenario 1.2: Shell command fails early when SDK bootstrap prerequisites are missing
+### Scenario 1.1: Shell starts without SDK bootstrap prerequisites
 
 **Steps:**
-1. Run the `shell` command in a clean environment with no configured SDKs.
+1. Run `companyhelm-runner shell` in a clean environment.
 
 **Expected Results:**
-- The command fails cleanly.
-- The message explains the missing SDK prerequisite.
-- The command does not proceed into a misleading interactive state.
+- The command opens the interactive shell instead of failing on SDK configuration.
+- The shell prints the resolved state DB path.
+- The shell shows the available inspection commands.
+
+### Scenario 1.2: Help output remains accurate
+
+**Steps:**
+1. Run `companyhelm-runner shell`.
+2. Run `help`.
+
+**Expected Results:**
+- The shell lists the supported commands.
+- The help text matches the current read-only DB inspection behavior.
 
 ---
 
-## 2. Shell and Daemon Option Alignment
+## 2. DB Inspection Commands
 
-### Scenario 2.1: Shell daemon override arguments remain aligned with root options
-
-**Steps:**
-1. Review the `shell` command behavior in relation to root command daemon options.
-2. Confirm that supported root options intended for daemon startup remain available through the shell flow.
-3. Confirm excluded options remain excluded where designed.
-
-**Expected Results:**
-- Supported daemon configuration options remain aligned with the root command.
-- Hardcoded exclusions stay excluded.
-- The shell wrapper behavior is internally consistent.
-
-### Scenario 2.2: Help output for shell remains accurate
+### Scenario 2.1: List threads
 
 **Steps:**
-1. Run help for the `shell` command.
-2. Compare the help text to actual behavior.
+1. Run `companyhelm-runner shell`.
+2. Enter `list threads`.
 
 **Expected Results:**
-- Help output renders successfully.
-- The described behavior is not materially misleading.
-- No stale option or usage text is present.
+- The shell prints thread rows from the local state DB.
+- Empty DBs report no thread rows cleanly.
+
+### Scenario 2.2: Inspect a single thread
+
+**Steps:**
+1. Run `companyhelm-runner shell`.
+2. Enter `thread status <thread-id>` for a known thread.
+
+**Expected Results:**
+- The shell prints the full DB row for the selected thread.
+- Unknown thread IDs return a clear not-found message.
+
+### Scenario 2.3: List containers
+
+**Steps:**
+1. Run `companyhelm-runner shell`.
+2. Enter `list containers`.
+
+**Expected Results:**
+- The shell prints per-thread runtime and DinD container fields from the DB.
+- The output includes thread IDs so container rows are attributable.
+
+### Scenario 2.4: Show daemon state
+
+**Steps:**
+1. Run `companyhelm-runner shell`.
+2. Enter `show daemon`.
+
+**Expected Results:**
+- The shell prints the `daemon_state` row when present.
+- Empty daemon state reports cleanly without crashing.
 
 ---
 
 ## 3. Regression Checklist
 
-1. Reproduce the original shell issue first.
-2. Verify the current shell command behavior matches the intended product behavior.
-3. Verify prerequisite failures remain clear.
-4. Verify shell-related help output still matches reality.
+1. Verify the shell still exits cleanly with `exit` or `quit`.
+2. Verify `shell --help` describes the read-only DB inspector.
+3. Verify the shell works both with the default DB path and with `--state-db-path`.

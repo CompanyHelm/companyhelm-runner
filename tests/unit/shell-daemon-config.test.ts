@@ -4,6 +4,7 @@ import { registerRunnerCommands } from "../../dist/commands/runner/register-runn
 import {
   buildShellDaemonOverrideArgs,
   getShellConfigurableDaemonOptions,
+  parseShellCommand,
 } from "../../dist/commands/shell.js";
 
 test("shell exposes daemon CLI overrides except hardcoded daemon/serverUrl/secret", () => {
@@ -61,4 +62,27 @@ test("shell builds daemon override args from selected option values", () => {
     "--log-level",
     "DEBUG",
   ]);
+});
+
+test("shell parses DB inspection commands and aliases", () => {
+  assert.deepEqual(parseShellCommand("list threads"), { type: "list-threads" });
+  assert.deepEqual(parseShellCommand("threads"), { type: "list-threads" });
+  assert.deepEqual(parseShellCommand("thread status thread-123"), {
+    type: "thread-status",
+    threadId: "thread-123",
+  });
+  assert.deepEqual(parseShellCommand("status thread-456"), {
+    type: "thread-status",
+    threadId: "thread-456",
+  });
+  assert.deepEqual(parseShellCommand("list containers"), { type: "list-containers" });
+  assert.deepEqual(parseShellCommand("show daemon"), { type: "show-daemon" });
+  assert.deepEqual(parseShellCommand("quit"), { type: "exit" });
+});
+
+test("shell reports unknown commands when parsing fails", () => {
+  assert.deepEqual(parseShellCommand("unsupported command"), {
+    type: "unknown",
+    input: "unsupported command",
+  });
 });

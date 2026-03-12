@@ -36,6 +36,12 @@ Check whether the daemon is running:
 companyhelm-runner status
 ```
 
+Open the interactive state DB shell:
+
+```bash
+companyhelm-runner shell
+```
+
 The `status` command prints:
 
 - whether the daemon is running
