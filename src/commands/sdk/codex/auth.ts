@@ -58,6 +58,10 @@ export const defaultUseDedicatedCodexAuthDependencies: UseDedicatedCodexAuthDepe
   spawnSyncCommand: spawnSync,
 };
 
+function isDedicatedCodexAuthentication(authentication: string | null | undefined): boolean {
+  return authentication === "dedicated" || authentication === "api-key";
+}
+
 type ContainerizedCodexLoginOptions = {
   containerName: string;
   dockerArgs: string[];
@@ -357,15 +361,32 @@ export async function ensureCodexRunnerStartState(
 
   try {
     const existingSdk = await db.select().from(agentSdks).where(eq(agentSdks.name, "codex")).get();
+    const hostInfo = deps.getHostInfoFn(cfg.codex.codex_auth_path);
+    const dedicatedAuthPath = join(expandHome(cfg.config_directory), cfg.codex.codex_auth_file_path);
+    const dedicatedAuthInfo = deps.getHostInfoFn(dedicatedAuthPath);
+
     if (deps.useDedicatedAuth) {
-      if (existingSdk?.authentication === "dedicated" && existingSdk.status === "configured") {
+      if (
+        existingSdk?.status === "configured" &&
+        isDedicatedCodexAuthentication(existingSdk.authentication) &&
+        dedicatedAuthInfo.codexAuthExists
+      ) {
         return;
       }
       await setCodexUnconfiguredInDb(db);
       return;
     }
 
-    const hostInfo = deps.getHostInfoFn(cfg.codex.codex_auth_path);
+    if (existingSdk?.status === "configured") {
+      if (existingSdk.authentication === "host" && hostInfo.codexAuthExists) {
+        return;
+      }
+
+      if (isDedicatedCodexAuthentication(existingSdk.authentication) && dedicatedAuthInfo.codexAuthExists) {
+        return;
+      }
+    }
+
     if (hostInfo.codexAuthExists) {
       deps.logInfo(`Detected Codex host auth at ${expandHome(cfg.codex.codex_auth_path)}; using host auth automatically.`);
       await setCodexHostAuthInDb(db);

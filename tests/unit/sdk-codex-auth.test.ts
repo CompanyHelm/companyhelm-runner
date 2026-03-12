@@ -266,6 +266,120 @@ test("ensureCodexRunnerStartState preserves existing dedicated auth when request
   assert.deepEqual(insertCalls, []);
 });
 
+test("ensureCodexRunnerStartState preserves existing dedicated auth when already configured", async () => {
+  const updateCalls: Array<{ authentication: string; status: string }> = [];
+
+  await ensureCodexRunnerStartState(
+    {
+      state_db_path: "/tmp/companyhelm-test.db",
+      config_directory: "/tmp/companyhelm-config",
+      codex: {
+        codex_auth_port: 1455,
+        codex_auth_file_path: "codex-auth.json",
+        codex_auth_path: "/home/agent/.codex/auth.json",
+      },
+    } as any,
+    {
+      getHostInfoFn: (authPath: string) => ({
+        uid: 1000,
+        gid: 1000,
+        home: "/tmp",
+        codexAuthExists: authPath === "/tmp/companyhelm-config/codex-auth.json" || authPath === "/home/agent/.codex/auth.json",
+      }),
+      initDbFn: async () => ({
+        db: {
+          select() {
+            return {
+              from() {
+                return {
+                  where() {
+                    return {
+                      get: async () => ({ name: "codex", authentication: "dedicated", status: "configured" }),
+                    };
+                  },
+                };
+              },
+            };
+          },
+          update() {
+            return {
+              set(values: { authentication: string; status: string }) {
+                updateCalls.push(values);
+                return {
+                  where() {
+                    return Promise.resolve();
+                  },
+                };
+              },
+            };
+          },
+        },
+        client: { close() {} },
+      }) as any,
+      logInfo: () => undefined,
+    },
+  );
+
+  assert.deepEqual(updateCalls, []);
+});
+
+test("ensureCodexRunnerStartState preserves existing api-key auth when already configured", async () => {
+  const updateCalls: Array<{ authentication: string; status: string }> = [];
+
+  await ensureCodexRunnerStartState(
+    {
+      state_db_path: "/tmp/companyhelm-test.db",
+      config_directory: "/tmp/companyhelm-config",
+      codex: {
+        codex_auth_port: 1455,
+        codex_auth_file_path: "codex-auth.json",
+        codex_auth_path: "/home/agent/.codex/auth.json",
+      },
+    } as any,
+    {
+      getHostInfoFn: (authPath: string) => ({
+        uid: 1000,
+        gid: 1000,
+        home: "/tmp",
+        codexAuthExists: authPath === "/tmp/companyhelm-config/codex-auth.json",
+      }),
+      initDbFn: async () => ({
+        db: {
+          select() {
+            return {
+              from() {
+                return {
+                  where() {
+                    return {
+                      get: async () => ({ name: "codex", authentication: "api-key", status: "configured" }),
+                    };
+                  },
+                };
+              },
+            };
+          },
+          update() {
+            return {
+              set(values: { authentication: string; status: string }) {
+                updateCalls.push(values);
+                return {
+                  where() {
+                    return Promise.resolve();
+                  },
+                };
+              },
+            };
+          },
+        },
+        client: { close() {} },
+      }) as any,
+      logInfo: () => undefined,
+    },
+  );
+
+  assert.deepEqual(updateCalls, []);
+});
+
 test("ensureCodexRunnerStartState marks Codex unconfigured when dedicated auth is requested without existing dedicated setup", async () => {
   const updateCalls: Array<{ authentication: string; status: string }> = [];
 

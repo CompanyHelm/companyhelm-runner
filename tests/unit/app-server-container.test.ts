@@ -302,6 +302,127 @@ test("AppServerContainerService errors when host auth mode is selected but the a
   }
 });
 
+test("AppServerContainerService mounts dedicated auth file for api-key mode", async () => {
+  const spawnedCommands: Array<{ command: string; args: string[] }> = [];
+  const fakeDocker = {
+    getImage() {
+      return {
+        async inspect() {
+          return {};
+        },
+      };
+    },
+  };
+
+  class FakeChildProcess extends EventEmitter {
+    stdout = new EventEmitter();
+    stderr = new EventEmitter();
+    stdin = {
+      write() {
+        return true;
+      },
+    };
+    killed = false;
+
+    kill() {
+      this.killed = true;
+      setImmediate(() => {
+        this.emit("exit", 0);
+      });
+      return true;
+    }
+  }
+
+  const childProcess = require("node:child_process") as typeof import("node:child_process");
+  const configModule = require("../../dist/config.js") as typeof import("../../dist/config.js");
+  const dbModule = require("../../dist/state/db.js") as typeof import("../../dist/state/db.js");
+  const hostModule = require("../../dist/service/host.js") as typeof import("../../dist/service/host.js");
+
+  const originalSpawn = childProcess.spawn;
+  const originalSpawnSync = childProcess.spawnSync;
+  const originalParse = configModule.config.parse;
+  const originalInitDb = dbModule.initDb;
+  const originalGetHostInfo = hostModule.getHostInfo;
+  const originalDateNow = Date.now;
+
+  Date.now = () => 1_700_000_000_000;
+  childProcess.spawn = (((command: string, args: string[]) => {
+    spawnedCommands.push({ command, args });
+    return new FakeChildProcess();
+  }) as unknown) as typeof childProcess.spawn;
+  childProcess.spawnSync = (() => ({ status: 0, signal: null, error: undefined })) as typeof childProcess.spawnSync;
+  configModule.config.parse = (() => ({
+    state_db_path: "/tmp/companyhelm-test.db",
+    runtime_image: "companyhelm/runner:latest",
+    agent_home_directory: "/home/agent",
+    agent_user: "agent",
+    config_directory: "/tmp/companyhelm-config",
+    codex: {
+      codex_auth_path: "/home/agent/.codex/auth.json",
+      codex_auth_file_path: "codex-auth.json",
+    },
+  })) as typeof configModule.config.parse;
+  dbModule.initDb = (async () => ({
+    db: {
+      select() {
+        return {
+          from() {
+            return {
+              where() {
+                return {
+                  async get() {
+                    return { name: "codex", authentication: "api-key" };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+    client: {
+      close() {
+        return undefined;
+      },
+    },
+  })) as typeof dbModule.initDb;
+  hostModule.getHostInfo = (() => ({
+    uid: 1000,
+    gid: 1000,
+    codexAuthExists: true,
+  })) as typeof hostModule.getHostInfo;
+
+  try {
+    const service = new AppServerContainerService({
+      docker: fakeDocker as any,
+    });
+
+    await service.start();
+    await service.stop();
+  } finally {
+    Date.now = originalDateNow;
+    childProcess.spawn = originalSpawn;
+    childProcess.spawnSync = originalSpawnSync;
+    configModule.config.parse = originalParse;
+    dbModule.initDb = originalInitDb;
+    hostModule.getHostInfo = originalGetHostInfo;
+  }
+
+  assert.equal(spawnedCommands.length, 1);
+  assert.deepEqual(spawnedCommands[0]?.args.slice(0, 10), [
+    "run",
+    "--rm",
+    "-i",
+    "--name",
+    "companyhelm-codex-app-server-1700000000000",
+    "--entrypoint",
+    "bash",
+    "--mount",
+    "type=bind,src=/tmp/companyhelm-config/codex-auth.json,dst=/home/agent/.codex/auth.json",
+    "companyhelm/runner:latest",
+  ]);
+});
+
 test("AppServerContainerService includes exit details when the app-server container dies before initialize", async () => {
   const fakeDocker = {
     getImage() {
