@@ -76,6 +76,14 @@ test("shell parses DB inspection commands and aliases", () => {
     threadId: "thread-456",
   });
   assert.deepEqual(parseShellCommand("list containers"), { type: "list-containers" });
+  assert.deepEqual(parseShellCommand("thread docker thread-789"), {
+    type: "thread-docker-shell",
+    threadId: "thread-789",
+  });
+  assert.deepEqual(parseShellCommand("docker shell thread-987"), {
+    type: "thread-docker-shell",
+    threadId: "thread-987",
+  });
   assert.deepEqual(parseShellCommand("show daemon"), { type: "show-daemon" });
   assert.deepEqual(parseShellCommand("quit"), { type: "exit" });
 });

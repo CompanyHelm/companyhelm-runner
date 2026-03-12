@@ -42,6 +42,8 @@ Open the interactive state DB shell:
 companyhelm-runner shell
 ```
 
+From the shell you can inspect threads and daemon state, and open a Docker bash session inside a selected thread runtime container.
+
 The `status` command prints:
 
 - whether the daemon is running
