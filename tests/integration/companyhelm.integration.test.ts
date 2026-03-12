@@ -40,7 +40,7 @@ const { config } = require("../../dist/config.js");
 const { AppServerService } = require("../../dist/service/app_server.js");
 const threadLifecycle = require("../../dist/service/thread_lifecycle.js");
 const { initDb } = require("../../dist/state/db.js");
-const { agentSdks, daemonState, llmModels, threads } = require("../../dist/state/schema.js");
+const { agentSdks, daemonState, llmModels, threadUserMessageRequestStore, threads } = require("../../dist/state/schema.js");
 const { isProcessRunning } = require("../../dist/utils/process.js");
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1074,6 +1074,22 @@ test("companyhelm shell exposes interactive DB inspection commands", async () =>
         startedAt: "2026-03-11T18:00:00.000Z",
         updatedAt: "2026-03-11T18:05:00.000Z",
       });
+      await db.insert(agentSdks).values({
+        name: "codex",
+        authentication: "host",
+        status: "configured",
+      });
+      await db.insert(llmModels).values({
+        name: "gpt-5.3-codex",
+        sdkName: "codex",
+        reasoningLevels: ["high"],
+      });
+      await db.insert(threadUserMessageRequestStore).values({
+        threadId: "thread-shell",
+        sdkTurnId: "turn-shell",
+        requestId: "request-shell",
+        sdkItemId: "item-shell",
+      });
     } finally {
       client.close();
     }
@@ -1087,6 +1103,10 @@ test("companyhelm shell exposes interactive DB inspection commands", async () =>
     });
 
     child.stdin.write("list threads\n");
+    child.stdin.write("list sdks\n");
+    child.stdin.write("list models\n");
+    child.stdin.write("list requests\n");
+    child.stdin.write("list daemon\n");
     child.stdin.write("thread status thread-shell\n");
     child.stdin.write("list containers\n");
     child.stdin.write("show daemon\n");
@@ -1100,6 +1120,13 @@ test("companyhelm shell exposes interactive DB inspection commands", async () =>
     assert.match(result.stdout, /State DB: .*state\.db/);
     assert.match(result.stdout, /Available commands:/);
     assert.match(result.stdout, /Threads:/);
+    assert.match(result.stdout, /Agent SDKs:/);
+    assert.match(result.stdout, /"name": "codex"/);
+    assert.match(result.stdout, /LLM models:/);
+    assert.match(result.stdout, /"sdkName": "codex"/);
+    assert.match(result.stdout, /Thread user message request store:/);
+    assert.match(result.stdout, /"requestId": "request-shell"/);
+    assert.match(result.stdout, /Daemon state table:/);
     assert.match(result.stdout, /thread docker <id>/);
     assert.match(result.stdout, /"id": "thread-shell"/);
     assert.match(result.stdout, /"status": "ready"/);
