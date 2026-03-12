@@ -1043,25 +1043,71 @@ test("companyhelm runner stop terminates the recorded daemon process", async () 
   }
 });
 
-test("companyhelm shell command fails early when daemon startup fails", async () => {
-  const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-shell-no-sdk-");
+test("companyhelm shell exposes interactive DB inspection commands", async () => {
+  const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-shell-db-");
 
   try {
+    const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
+    const { db, client } = await initDb(stateDbPath);
+    try {
+      await db.insert(threads).values({
+        id: "thread-shell",
+        sdkThreadId: "sdk-thread-shell",
+        cliSecret: "shell-secret",
+        model: "gpt-5",
+        reasoningLevel: "high",
+        additionalModelInstructions: "Inspect only",
+        status: "ready",
+        currentSdkTurnId: "turn-shell",
+        isCurrentTurnRunning: true,
+        workspace: "/tmp/thread-shell",
+        runtimeContainer: "companyhelm-runtime-thread-shell",
+        dindContainer: "companyhelm-dind-thread-shell",
+        homeDirectory: "/home/agent",
+        uid: 1000,
+        gid: 1000,
+      });
+      await db.insert(daemonState).values({
+        id: "runner",
+        pid: 4242,
+        logPath: "/tmp/companyhelm-runner.log",
+        startedAt: "2026-03-11T18:00:00.000Z",
+        updatedAt: "2026-03-11T18:05:00.000Z",
+      });
+    } finally {
+      client.close();
+    }
+
     const repositoryRoot = path.resolve(__dirname, "../..");
     const cliEntryPoint = path.join(repositoryRoot, "dist", "cli.js");
-    const result = await waitForExit(
-      spawn(process.execPath, [cliEntryPoint, "shell"], {
-        cwd: repositoryRoot,
-        env: { ...process.env, HOME: homeDirectory },
-        stdio: ["ignore", "pipe", "pipe"],
-      }),
-    );
+    const child = spawn(process.execPath, [cliEntryPoint, "shell"], {
+      cwd: repositoryRoot,
+      env: { ...process.env, HOME: homeDirectory },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
 
-    assert.notEqual(result.code, 0, `CLI unexpectedly succeeded. stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-    assert.match(
-      `${result.stdout}\n${result.stderr}`,
-      /No SDKs configured\. Daemon mode requires at least one configured SDK\./,
-    );
+    child.stdin.write("list threads\n");
+    child.stdin.write("thread status thread-shell\n");
+    child.stdin.write("list containers\n");
+    child.stdin.write("show daemon\n");
+    child.stdin.write("exit\n");
+    child.stdin.end();
+
+    const result = await waitForExit(child);
+
+    assert.equal(result.code, 0, `CLI failed. stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(result.stderr.trim(), "");
+    assert.match(result.stdout, /State DB: .*state\.db/);
+    assert.match(result.stdout, /Available commands:/);
+    assert.match(result.stdout, /Threads:/);
+    assert.match(result.stdout, /"id": "thread-shell"/);
+    assert.match(result.stdout, /"status": "ready"/);
+    assert.match(result.stdout, /"sdkThreadId": "sdk-thread-shell"/);
+    assert.match(result.stdout, /Containers:/);
+    assert.match(result.stdout, /"runtimeContainer": "companyhelm-runtime-thread-shell"/);
+    assert.match(result.stdout, /"dindContainer": "companyhelm-dind-thread-shell"/);
+    assert.match(result.stdout, /Daemon state:/);
+    assert.match(result.stdout, /"pid": 4242/);
   } finally {
     await rm(homeDirectory, { recursive: true, force: true });
   }
