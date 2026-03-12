@@ -6,23 +6,13 @@ import { config as configSchema } from "../config.js";
 import { runThreadDockerCommand } from "./thread/docker.js";
 import { RUNNER_DAEMON_STATE_ID } from "../state/daemon_state.js";
 import { initDb } from "../state/db.js";
-import { daemonState, threads } from "../state/schema.js";
+import { agentSdks, daemonState, llmModels, threadUserMessageRequestStore, threads } from "../state/schema.js";
 import { addRunnerStartOptions } from "./runner/common.js";
 import { restoreInteractiveTerminalState } from "../utils/terminal.js";
 import { expandHome } from "../utils/path.js";
 
 const NON_OVERRIDABLE_DAEMON_OPTION_NAMES = new Set(["daemon", "serverUrl", "secret", "help"]);
 const SHELL_PROMPT = "companyhelm db> ";
-const SHELL_HELP_TEXT = [
-  "Available commands:",
-  "  help                 Show this help.",
-  "  list threads         List full thread rows from the state DB.",
-  "  thread status <id>   Show the full thread row for one thread.",
-  "  list containers      List thread container fields from the state DB.",
-  "  thread docker <id>   Docker exec bash into the selected thread runtime container.",
-  "  show daemon          Show the daemon_state row from the state DB.",
-  "  exit                 Exit the shell.",
-].join("\n");
 
 export interface ShellDaemonOption {
   name: string;
@@ -108,7 +98,7 @@ export interface ShellCommandOptions {
 
 type ParsedShellCommand =
   | { type: "help" }
-  | { type: "list-threads" }
+  | { type: "list-table"; tableKey: ShellTableKey }
   | { type: "thread-status"; threadId: string }
   | { type: "list-containers" }
   | { type: "thread-docker-shell"; threadId: string }
@@ -118,13 +108,93 @@ type ParsedShellCommand =
 
 type ShellDatabase = Awaited<ReturnType<typeof initDb>>["db"];
 type ShellMainAction =
-  | "list-threads"
+  | "list-table"
   | "thread-status"
   | "list-containers"
   | "thread-docker-shell"
   | "show-daemon"
   | "help"
   | "exit";
+
+type ShellTableKey = "threads" | "agent-sdks" | "llm-models" | "thread-user-message-request-store" | "daemon-state";
+
+interface ShellTableDefinition {
+  key: ShellTableKey;
+  label: string;
+  menuLabel: string;
+  menuHint: string;
+  commandAliases: string[];
+  loadRows: (db: ShellDatabase) => Promise<Array<Record<string, unknown>>>;
+}
+
+const SHELL_TABLES: ShellTableDefinition[] = [
+  {
+    key: "threads",
+    label: "Threads",
+    menuLabel: "List threads",
+    menuHint: "Full rows from the threads table",
+    commandAliases: ["threads", "thread"],
+    loadRows: async (db) => (await db.select().from(threads).orderBy(threads.id).all()) as Array<Record<string, unknown>>,
+  },
+  {
+    key: "agent-sdks",
+    label: "Agent SDKs",
+    menuLabel: "List SDKs",
+    menuHint: "Full rows from the agent_sdks table",
+    commandAliases: ["sdks", "sdk", "agent-sdks"],
+    loadRows: async (db) => (await db.select().from(agentSdks).orderBy(agentSdks.name).all()) as Array<Record<string, unknown>>,
+  },
+  {
+    key: "llm-models",
+    label: "LLM models",
+    menuLabel: "List models",
+    menuHint: "Full rows from the llm_models table",
+    commandAliases: ["models", "model", "llm-models"],
+    loadRows: async (db) => (
+      await db.select().from(llmModels).orderBy(llmModels.sdkName, llmModels.name).all()
+    ) as Array<Record<string, unknown>>,
+  },
+  {
+    key: "thread-user-message-request-store",
+    label: "Thread user message request store",
+    menuLabel: "List requests",
+    menuHint: "Full rows from the thread_user_message_request_store table",
+    commandAliases: ["requests", "request", "message-requests", "user-message-requests"],
+    loadRows: async (db) => (
+      await db.select().from(threadUserMessageRequestStore).orderBy(threadUserMessageRequestStore.id).all()
+    ) as Array<Record<string, unknown>>,
+  },
+  {
+    key: "daemon-state",
+    label: "Daemon state table",
+    menuLabel: "List daemon rows",
+    menuHint: "Full rows from the daemon_state table",
+    commandAliases: ["daemon", "daemons", "daemon-state"],
+    loadRows: async (db) => (
+      await db.select().from(daemonState).orderBy(daemonState.id).all()
+    ) as Array<Record<string, unknown>>,
+  },
+];
+
+const SHELL_TABLE_BY_KEY = new Map(SHELL_TABLES.map((table) => [table.key, table] as const));
+const SHELL_TABLE_BY_ALIAS = new Map(
+  SHELL_TABLES.flatMap((table) => table.commandAliases.map((alias) => [alias, table] as const)),
+);
+
+const SHELL_HELP_TEXT = [
+  "Available commands:",
+  "  help                 Show this help.",
+  "  list threads         List full thread rows from the threads table.",
+  "  list sdks            List full rows from the agent_sdks table.",
+  "  list models          List full rows from the llm_models table.",
+  "  list requests        List full rows from the thread_user_message_request_store table.",
+  "  list daemon          List full rows from the daemon_state table.",
+  "  thread status <id>   Show the full thread row for one thread.",
+  "  list containers      List thread container fields from the state DB.",
+  "  thread docker <id>   Docker exec bash into the selected thread runtime container.",
+  "  show daemon          Show the daemon_state row from the state DB.",
+  "  exit                 Exit the shell.",
+].join("\n");
 
 function jsonReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
@@ -152,6 +222,10 @@ function printRow(label: string, row: Record<string, unknown>): void {
   console.log();
 }
 
+function resolveShellTableByAlias(alias: string): ShellTableDefinition | undefined {
+  return SHELL_TABLE_BY_ALIAS.get(alias.toLowerCase());
+}
+
 export function parseShellCommand(input: string): ParsedShellCommand {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -167,7 +241,16 @@ export function parseShellCommand(input: string): ParsedShellCommand {
       case "?":
         return { type: "help" };
       case "threads":
-        return { type: "list-threads" };
+        return { type: "list-table", tableKey: "threads" };
+      case "sdks":
+      case "sdk":
+        return { type: "list-table", tableKey: "agent-sdks" };
+      case "models":
+      case "model":
+        return { type: "list-table", tableKey: "llm-models" };
+      case "requests":
+      case "request":
+        return { type: "list-table", tableKey: "thread-user-message-request-store" };
       case "containers":
         return { type: "list-containers" };
       case "daemon":
@@ -181,12 +264,15 @@ export function parseShellCommand(input: string): ParsedShellCommand {
   }
 
   if (normalized.length === 2) {
-    if (normalized[0] === "list" && normalized[1] === "threads") {
-      return { type: "list-threads" };
-    }
-
     if (normalized[0] === "list" && normalized[1] === "containers") {
       return { type: "list-containers" };
+    }
+
+    if (normalized[0] === "list") {
+      const table = resolveShellTableByAlias(normalized[1]);
+      if (table) {
+        return { type: "list-table", tableKey: table.key };
+      }
     }
 
     if (normalized[0] === "show" && normalized[1] === "daemon") {
@@ -248,7 +334,7 @@ async function promptShellAction(): Promise<ShellMainAction | null> {
   const action = await p.select<ShellMainAction>({
     message: "Choose shell action",
     options: [
-      { value: "list-threads", label: "List threads" },
+      { value: "list-table", label: "Inspect runner tables", hint: "Threads, SDKs, models, requests, daemon state" },
       { value: "thread-status", label: "Thread status" },
       { value: "list-containers", label: "List containers" },
       { value: "thread-docker-shell", label: "Thread docker shell (bash)" },
@@ -259,6 +345,19 @@ async function promptShellAction(): Promise<ShellMainAction | null> {
   });
 
   return p.isCancel(action) ? null : action;
+}
+
+async function promptShellTable(): Promise<ShellTableKey | null> {
+  const selection = await p.select<ShellTableKey>({
+    message: "Choose table to list",
+    options: SHELL_TABLES.map((table) => ({
+      value: table.key,
+      label: table.menuLabel,
+      hint: table.menuHint,
+    })),
+  });
+
+  return p.isCancel(selection) ? null : selection;
 }
 
 async function runClackShell(db: ShellDatabase, stateDbPath: string): Promise<void> {
@@ -277,9 +376,15 @@ async function runClackShell(db: ShellDatabase, stateDbPath: string): Promise<vo
           case "help":
             console.log(SHELL_HELP_TEXT);
             break;
-          case "list-threads":
-            await runParsedShellCommand(db, { type: "list-threads" });
+          case "list-table": {
+            const tableKey = await promptShellTable();
+            if (!tableKey) {
+              break;
+            }
+
+            await runParsedShellCommand(db, { type: "list-table", tableKey });
             break;
+          }
           case "thread-status": {
             const threadId = await selectThreadId(db, "Select thread");
             if (!threadId) {
@@ -322,9 +427,15 @@ async function runParsedShellCommand(db: ShellDatabase, command: ParsedShellComm
     case "help":
       console.log(SHELL_HELP_TEXT);
       return false;
-    case "list-threads": {
-      const rows = await db.select().from(threads).orderBy(threads.id).all();
-      printRows("Threads", rows as Array<Record<string, unknown>>);
+    case "list-table": {
+      const table = SHELL_TABLE_BY_KEY.get(command.tableKey);
+      if (!table) {
+        console.log(`Unknown table key: ${command.tableKey}`);
+        return false;
+      }
+
+      const rows = await table.loadRows(db);
+      printRows(table.label, rows);
       return false;
     }
     case "thread-status": {

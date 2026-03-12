@@ -65,8 +65,16 @@ test("shell builds daemon override args from selected option values", () => {
 });
 
 test("shell parses DB inspection commands and aliases", () => {
-  assert.deepEqual(parseShellCommand("list threads"), { type: "list-threads" });
-  assert.deepEqual(parseShellCommand("threads"), { type: "list-threads" });
+  assert.deepEqual(parseShellCommand("list threads"), { type: "list-table", tableKey: "threads" });
+  assert.deepEqual(parseShellCommand("threads"), { type: "list-table", tableKey: "threads" });
+  assert.deepEqual(parseShellCommand("list sdks"), { type: "list-table", tableKey: "agent-sdks" });
+  assert.deepEqual(parseShellCommand("sdks"), { type: "list-table", tableKey: "agent-sdks" });
+  assert.deepEqual(parseShellCommand("list models"), { type: "list-table", tableKey: "llm-models" });
+  assert.deepEqual(parseShellCommand("list requests"), {
+    type: "list-table",
+    tableKey: "thread-user-message-request-store",
+  });
+  assert.deepEqual(parseShellCommand("list daemon"), { type: "list-table", tableKey: "daemon-state" });
   assert.deepEqual(parseShellCommand("thread status thread-123"), {
     type: "thread-status",
     threadId: "thread-123",
