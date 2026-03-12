@@ -24,3 +24,12 @@ test("runner help lists the companyhelm-runner command alias", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /companyhelm-runner \[options\]/);
 });
+
+test("runner help includes the logs command", () => {
+  const result = spawnSync(process.execPath, [cliEntryPoint, "--help"], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /\blogs\b/);
+});
