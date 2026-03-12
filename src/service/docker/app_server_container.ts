@@ -264,6 +264,7 @@ export class AppServerContainerService implements AppServerTransport {
 
     const containerHome = cfg.agent_home_directory;
     const containerAuthPath = resolveContainerPath(cfg.codex.codex_auth_path, containerHome);
+    const hostAuthPath = expandHome(cfg.codex.codex_auth_path);
     const hostDedicatedAuthPath = `${expandHome(cfg.config_directory)}/${cfg.codex.codex_auth_file_path}`;
 
     const mountArgs: string[] = [];
@@ -272,6 +273,11 @@ export class AppServerContainerService implements AppServerTransport {
         throw new Error(`Dedicated Codex auth file was not found at ${hostDedicatedAuthPath}`);
       }
       mountArgs.push("--mount", `type=bind,src=${hostDedicatedAuthPath},dst=${containerAuthPath}`);
+    } else if (codexAuthMode === "host") {
+      if (!hostInfo.codexAuthExists) {
+        throw new Error(`Codex host auth file was not found at ${hostAuthPath}`);
+      }
+      mountArgs.push("--mount", `type=bind,src=${hostAuthPath},dst=${containerAuthPath}`);
     }
 
     this.containerName = `companyhelm-codex-app-server-${Date.now()}`;

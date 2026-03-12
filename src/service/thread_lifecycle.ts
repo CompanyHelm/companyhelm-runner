@@ -193,7 +193,7 @@ export function buildSharedThreadMounts(options: ThreadMountOptions): MountSetti
   mounts.push({
     Type: "bind",
     Source: hostAuthPath,
-    Target: hostAuthPath,
+    Target: resolveContainerPath(options.codexAuthPath, options.containerHomeDirectory),
   });
 
   return mounts;

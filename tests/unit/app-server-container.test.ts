@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { homedir } from "node:os";
 import { AppServerContainerService } from "../../dist/service/docker/app_server_container.js";
 
 function callEnsureImageAvailable(service: AppServerContainerService, image: string): Promise<void> {
@@ -150,7 +151,7 @@ test("AppServerContainerService reports launch progress when starting the runner
     agent_user: "agent",
     config_directory: "/tmp/companyhelm-config",
     codex: {
-      codex_auth_path: "/home/agent/.codex/auth.json",
+      codex_auth_path: "~/.codex/auth.json",
       codex_auth_file_path: "codex-auth.json",
     },
   })) as typeof configModule.config.parse;
@@ -207,10 +208,98 @@ test("AppServerContainerService reports launch progress when starting the runner
   ]);
   assert.equal(spawnedCommands.length, 1);
   assert.equal(spawnedCommands[0]?.command, "docker");
+  assert.deepEqual(spawnedCommands[0]?.args.slice(0, 10), [
+    "run",
+    "--rm",
+    "-i",
+    "--name",
+    "companyhelm-codex-app-server-1700000000000",
+    "--entrypoint",
+    "bash",
+    "--mount",
+    `type=bind,src=${homedir()}/.codex/auth.json,dst=/home/agent/.codex/auth.json`,
+    "companyhelm/runner:latest",
+  ]);
   const bootstrapScript = spawnedCommands[0]?.args.at(-1) ?? "";
   assert.match(bootstrapScript, /getent passwd "\$AGENT_UID"/);
   assert.match(bootstrapScript, /AGENT_USER="\$EXISTING_UID_USER"/);
   assert.match(bootstrapScript, /usermod -u "\$AGENT_UID" -g "\$AGENT_GROUP" -d "\$AGENT_HOME" -s \/bin\/bash "\$AGENT_USER"/);
+});
+
+test("AppServerContainerService errors when host auth mode is selected but the auth file is missing", async () => {
+  const fakeDocker = {
+    getImage() {
+      return {
+        async inspect() {
+          return {};
+        },
+      };
+    },
+  };
+
+  const configModule = require("../../dist/config.js") as typeof import("../../dist/config.js");
+  const dbModule = require("../../dist/state/db.js") as typeof import("../../dist/state/db.js");
+  const hostModule = require("../../dist/service/host.js") as typeof import("../../dist/service/host.js");
+
+  const originalParse = configModule.config.parse;
+  const originalInitDb = dbModule.initDb;
+  const originalGetHostInfo = hostModule.getHostInfo;
+
+  configModule.config.parse = (() => ({
+    state_db_path: "/tmp/companyhelm-test.db",
+    runtime_image: "companyhelm/runner:latest",
+    agent_home_directory: "/home/agent",
+    agent_user: "agent",
+    config_directory: "/tmp/companyhelm-config",
+    codex: {
+      codex_auth_path: "/Users/alice/.codex/auth.json",
+      codex_auth_file_path: "codex-auth.json",
+    },
+  })) as typeof configModule.config.parse;
+  dbModule.initDb = (async () => ({
+    db: {
+      select() {
+        return {
+          from() {
+            return {
+              where() {
+                return {
+                  async get() {
+                    return { name: "codex", authentication: "host" };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+    client: {
+      close() {
+        return undefined;
+      },
+    },
+  })) as typeof dbModule.initDb;
+  hostModule.getHostInfo = (() => ({
+    uid: 1000,
+    gid: 1000,
+    codexAuthExists: false,
+  })) as typeof hostModule.getHostInfo;
+
+  try {
+    const service = new AppServerContainerService({
+      docker: fakeDocker as any,
+    });
+
+    await assert.rejects(
+      service.start(),
+      /Codex host auth file was not found at \/Users\/alice\/\.codex\/auth\.json/,
+    );
+  } finally {
+    configModule.config.parse = originalParse;
+    dbModule.initDb = originalInitDb;
+    hostModule.getHostInfo = originalGetHostInfo;
+  }
 });
 
 test("AppServerContainerService includes exit details when the app-server container dies before initialize", async () => {

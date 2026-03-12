@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
 import path from "node:path";
 
 import {
@@ -71,13 +72,13 @@ test("buildSharedThreadMounts reuses shared workspace and dedicated auth mount",
   ]);
 });
 
-test("buildSharedThreadMounts uses codex_auth_path as both source and target in host mode", () => {
+test("buildSharedThreadMounts maps host auth into the container auth path in host mode", () => {
   const mounts = buildSharedThreadMounts({
     threadDirectory: "/tmp/threads/thread-2",
     homeVolumeName: "companyhelm-home-thread-thread-2",
     tmpVolumeName: "companyhelm-tmp-thread-thread-2",
     codexAuthMode: "host",
-    codexAuthPath: "/Users/alice/.codex/auth.json",
+    codexAuthPath: "~/.codex/auth.json",
     codexAuthFilePath: "ignored.json",
     configDirectory: "/config/companyhelm",
     containerHomeDirectory: "/home/agent",
@@ -101,8 +102,8 @@ test("buildSharedThreadMounts uses codex_auth_path as both source and target in 
     },
     {
       Type: "bind",
-      Source: "/Users/alice/.codex/auth.json",
-      Target: "/Users/alice/.codex/auth.json",
+      Source: `${homedir()}/.codex/auth.json`,
+      Target: "/home/agent/.codex/auth.json",
     },
   ]);
 });
