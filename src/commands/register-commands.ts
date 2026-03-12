@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { addRunnerStartOptions } from "./runner/common.js";
+import { registerLogsCommand } from "./logs.js";
 import { registerRunnerCommands } from "./runner/register-runner-commands.js";
 import { runRunnerStartCommand } from "./runner/start.js";
 import { registerShellCommand } from "./shell.js";
@@ -15,6 +16,7 @@ export function registerCommands(program: Command): void {
   ).action(runRunnerStartCommand);
   registerRunnerCommands(program);
   registerStatusCommand(program);
+  registerLogsCommand(program);
   registerThreadCommands(program);
   registerShellCommand(program);
   registerSdkCommands(program);
