@@ -1513,23 +1513,33 @@ test("companyhelm root command returns threadUpdate deleted for deleteThreadRequ
     await seedStateDatabase(homeDirectory);
 
     let receivedRequestError: any = null;
+    let receivedDeleteRequestId: string | null = null;
     let receivedDeletedThreadUpdate = false;
+    const requestId = "request-missing-delete-thread";
 
     const started = await startFakeServer("/grpc", {
       registerRunner(call, callback) {
         callback(null, create(RegisterRunnerResponseSchema, {}));
       },
       controlChannel(call) {
-        call.write(
-          create(ServerMessageSchema, {
+        const deleteThreadMessage = create(ServerMessageSchema, {
             request: {
               case: "deleteThreadRequest",
               value: {
                 threadId: "thread-missing-delete",
               },
             },
-          }),
-        );
+          }) as {
+            $unknown?: Array<{ no: number; wireType: number; data: Buffer }>;
+          };
+        deleteThreadMessage.$unknown = [
+          {
+            no: 1,
+            wireType: 2,
+            data: Buffer.concat([Buffer.from([requestId.length]), Buffer.from(requestId, "utf8")]),
+          },
+        ];
+        call.write(deleteThreadMessage);
 
         call.on("data", (message) => {
           if (message.payload.case === "requestError") {
@@ -1543,6 +1553,7 @@ test("companyhelm root command returns threadUpdate deleted for deleteThreadRequ
             message.payload.value.threadId === "thread-missing-delete" &&
             message.payload.value.status === ThreadStatus.DELETED
           ) {
+            receivedDeleteRequestId = message.requestId ?? null;
             receivedDeletedThreadUpdate = true;
             shouldStopAfterValidation = true;
             call.end();
@@ -1563,6 +1574,7 @@ test("companyhelm root command returns threadUpdate deleted for deleteThreadRequ
 
     assert.equal(receivedRequestError, null, "did not expect requestError for missing thread delete");
     assert.equal(receivedDeletedThreadUpdate, true, "expected deleted update for missing thread delete");
+    assert.equal(receivedDeleteRequestId, requestId, "expected deleted update to preserve request id");
     assert.equal(
       warnSpy.mock.calls.some((call) =>
         String(call[0]).includes(
