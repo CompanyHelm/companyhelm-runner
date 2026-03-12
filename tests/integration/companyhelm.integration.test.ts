@@ -38,6 +38,7 @@ const {
 } = require("../../dist/service/companyhelm_api_client.js");
 const { config } = require("../../dist/config.js");
 const { AppServerService } = require("../../dist/service/app_server.js");
+const refreshModels = require("../../dist/service/sdk/refresh_models.js");
 const threadLifecycle = require("../../dist/service/thread_lifecycle.js");
 const { initDb } = require("../../dist/state/db.js");
 const { agentSdks, daemonState, llmModels, threadUserMessageRequestStore, threads } = require("../../dist/state/schema.js");
@@ -296,6 +297,12 @@ async function writeHostAuthFile(homeDirectory: string): Promise<void> {
   const authDirectory = path.join(homeDirectory, ".codex");
   await mkdir(authDirectory, { recursive: true });
   await writeFile(path.join(authDirectory, "auth.json"), "{}", "utf8");
+}
+
+async function writeDedicatedAuthFile(homeDirectory: string): Promise<void> {
+  const configDirectory = resolveDefaultConfigDirectory(homeDirectory);
+  await mkdir(configDirectory, { recursive: true });
+  await writeFile(path.join(configDirectory, "codex-auth.json"), "{}", "utf8");
 }
 
 function isDockerNotFoundError(error: unknown): boolean {
@@ -727,6 +734,7 @@ test("companyhelm root command registers codex as error when configured model re
   let server: grpc.Server | undefined;
   const previousHome = process.env.HOME;
   const reconnectStopError = new Error("stop root command after error registration validation");
+  const refreshFailure = new Error("simulated codex model refresh failure");
   let shouldStopAfterValidation = false;
   const nativeSetTimeout = global.setTimeout;
   const reconnectDelaySpy = vi.spyOn(global, "setTimeout").mockImplementation(((handler: any, timeout?: any, ...args: any[]) => {
@@ -735,10 +743,14 @@ test("companyhelm root command registers codex as error when configured model re
     }
     return nativeSetTimeout(handler, timeout as any, ...args);
   }) as typeof global.setTimeout);
+  const refreshModelsSpy = vi.spyOn(refreshModels, "refreshSdkModels").mockImplementation(async () => {
+    throw refreshFailure;
+  });
 
   try {
     process.env.HOME = homeDirectory;
     await seedStateDatabaseWithoutModels(homeDirectory, "dedicated");
+    await writeDedicatedAuthFile(homeDirectory);
 
     let registerRequest: any = null;
     const started = await startFakeServer("/grpc", {
@@ -767,6 +779,7 @@ test("companyhelm root command registers codex as error when configured model re
     assert.equal(registerRequest?.agentSdks?.[0]?.status, 3);
     assert.match(String(registerRequest?.agentSdks?.[0]?.errorMessage ?? ""), /Failed to refresh codex models/i);
   } finally {
+    refreshModelsSpy.mockRestore();
     reconnectDelaySpy.mockRestore();
     if (server) {
       await shutdownServer(server);
