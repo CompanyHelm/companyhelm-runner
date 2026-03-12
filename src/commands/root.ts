@@ -614,111 +614,6 @@ export function extractThreadNameUpdateFromNotification(
   return { sdkThreadId, threadName };
 }
 
-interface UnknownWireField {
-  no?: number;
-  wireType?: number;
-  data?: unknown;
-}
-
-interface ServerMessageWithUnknownFields {
-  requestId?: string;
-  $unknown?: UnknownWireField[];
-}
-
-function isByte(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255;
-}
-
-function decodeLengthDelimitedPayload(bytes: Uint8Array): Uint8Array | null {
-  let index = 0;
-  let shift = 0;
-  let length = 0;
-
-  while (index < bytes.length) {
-    const current = bytes[index];
-    length |= (current & 0x7f) << shift;
-    index += 1;
-    if ((current & 0x80) === 0) {
-      break;
-    }
-    shift += 7;
-    if (shift > 28) {
-      return null;
-    }
-  }
-
-  if (index === 0) {
-    return null;
-  }
-
-  if (index + length !== bytes.length) {
-    return null;
-  }
-
-  return bytes.subarray(index);
-}
-
-function toUint8Array(data: unknown): Uint8Array | null {
-  if (data instanceof Uint8Array) {
-    return data;
-  }
-
-  if (Buffer.isBuffer(data)) {
-    return new Uint8Array(data);
-  }
-
-  if (Array.isArray(data) && data.every(isByte)) {
-    return Uint8Array.from(data);
-  }
-
-  if (
-    data &&
-    typeof data === "object" &&
-    "type" in data &&
-    (data as { type?: unknown }).type === "Buffer" &&
-    "data" in data &&
-    Array.isArray((data as { data?: unknown }).data)
-  ) {
-    const values = (data as { data: unknown[] }).data;
-    if (values.every(isByte)) {
-      return Uint8Array.from(values);
-    }
-  }
-
-  return null;
-}
-
-export function extractServerMessageRequestId(serverMessage: unknown): string | undefined {
-  if (!serverMessage || typeof serverMessage !== "object") {
-    return undefined;
-  }
-
-  const typedMessage = serverMessage as ServerMessageWithUnknownFields;
-  if (typeof typedMessage.requestId === "string" && typedMessage.requestId.length > 0) {
-    return typedMessage.requestId;
-  }
-
-  if (!Array.isArray(typedMessage.$unknown)) {
-    return undefined;
-  }
-
-  for (const field of typedMessage.$unknown) {
-    if (field?.no !== 1 || field.wireType !== 2) {
-      continue;
-    }
-
-    const bytes = toUint8Array(field.data);
-    if (!bytes || bytes.length === 0) {
-      continue;
-    }
-
-    const payload = decodeLengthDelimitedPayload(bytes) ?? bytes;
-    return Buffer.from(payload).toString("utf8");
-  }
-
-  return undefined;
-}
-
 function isGrpcServiceError(error: unknown): error is grpc.ServiceError {
   return Boolean(error && typeof error === "object" && "code" in error);
 }
@@ -3278,7 +3173,7 @@ export async function runCommandLoop(
   logger: Logger,
 ): Promise<void> {
   for await (const serverMessage of commandChannel) {
-    const requestId = extractServerMessageRequestId(serverMessage);
+    const requestId = serverMessage.requestId ?? undefined;
     switch (serverMessage.request.case) {
       case "createThreadRequest":
         await handleCreateThreadRequest(

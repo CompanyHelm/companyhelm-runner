@@ -1436,6 +1436,7 @@ test("companyhelm root command returns requestError for createThreadRequest when
         const createThreadMessage = create(
           ServerMessageSchema,
           {
+            requestId,
             request: {
                 case: "createThreadRequest",
                 value: {
@@ -1444,16 +1445,7 @@ test("companyhelm root command returns requestError for createThreadRequest when
                 },
               },
             },
-        ) as {
-          $unknown?: Array<{ no: number; wireType: number; data: Buffer }>;
-        };
-        createThreadMessage.$unknown = [
-          {
-            no: 1,
-            wireType: 2,
-            data: Buffer.concat([Buffer.from([requestId.length]), Buffer.from(requestId, "utf8")]),
-          },
-        ];
+        );
         call.write(
           createThreadMessage,
         );
@@ -1523,22 +1515,14 @@ test("companyhelm root command returns threadUpdate deleted for deleteThreadRequ
       },
       controlChannel(call) {
         const deleteThreadMessage = create(ServerMessageSchema, {
+            requestId,
             request: {
               case: "deleteThreadRequest",
               value: {
                 threadId: "thread-missing-delete",
               },
             },
-          }) as {
-            $unknown?: Array<{ no: number; wireType: number; data: Buffer }>;
-          };
-        deleteThreadMessage.$unknown = [
-          {
-            no: 1,
-            wireType: 2,
-            data: Buffer.concat([Buffer.from([requestId.length]), Buffer.from(requestId, "utf8")]),
-          },
-        ];
+          });
         call.write(deleteThreadMessage);
 
         call.on("data", (message) => {
@@ -1914,6 +1898,7 @@ test("companyhelm root command echoes app-server thread/start response id on thr
         const createThreadMessage = create(
           ServerMessageSchema,
           {
+            requestId,
             request: {
               case: "createThreadRequest",
               value: {
@@ -1924,16 +1909,7 @@ test("companyhelm root command echoes app-server thread/start response id on thr
               },
             },
           },
-        ) as {
-          $unknown?: Array<{ no: number; wireType: number; data: Buffer }>;
-        };
-        createThreadMessage.$unknown = [
-          {
-            no: 1,
-            wireType: 2,
-            data: Buffer.concat([Buffer.from([requestId.length]), Buffer.from(requestId, "utf8")]),
-          },
-        ];
+        );
         call.write(createThreadMessage);
 
         call.on("data", (message) => {
