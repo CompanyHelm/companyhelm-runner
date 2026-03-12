@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { Command } from "commander";
-import { registerRunnerCommands } from "../../dist/commands/runner/register-runner-commands.js";
 import {
   buildShellDaemonOverrideArgs,
   getShellConfigurableDaemonOptions,
@@ -9,7 +8,6 @@ import {
 
 test("shell exposes daemon CLI overrides except hardcoded daemon/serverUrl/secret", () => {
   const program = new Command();
-  registerRunnerCommands(program);
 
   const options = getShellConfigurableDaemonOptions(program);
   const optionNames = options.map((option) => option.name);
@@ -29,7 +27,6 @@ test("shell exposes daemon CLI overrides except hardcoded daemon/serverUrl/secre
 
 test("shell builds daemon override args from selected option values", () => {
   const program = new Command();
-  registerRunnerCommands(program);
   const options = getShellConfigurableDaemonOptions(program);
 
   const args = buildShellDaemonOverrideArgs(options, {
