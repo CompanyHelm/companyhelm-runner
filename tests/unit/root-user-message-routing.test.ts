@@ -26,5 +26,11 @@ test("isNoRunningTurnInterruptError matches app-server no-running-turn interrupt
     ),
     true,
   );
+  assert.equal(
+    isNoRunningTurnInterruptError(
+      new Error("Chat error: Thread 'thread-1' is not running, so it cannot be interrupted."),
+    ),
+    true,
+  );
   assert.equal(isNoRunningTurnInterruptError(new Error("turn/interrupt failed for another reason")), false);
 });

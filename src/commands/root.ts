@@ -481,7 +481,10 @@ export function isNoActiveTurnSteerError(error: unknown): boolean {
 }
 
 export function isNoRunningTurnInterruptError(error: unknown): boolean {
-  return /no running turn to interrupt/i.test(toErrorMessage(error));
+  const message = toErrorMessage(error);
+  return /no running turn to interrupt/i.test(message)
+    || /thread .* is not running/i.test(message)
+    || /thread .* already stopped/i.test(message);
 }
 
 function isTurnCompletionTimeoutError(error: unknown): boolean {
@@ -2577,7 +2580,7 @@ async function reportNoRunningInterruptAsReady(
     );
   }
   await sendThreadUpdate(commandChannel, request.threadId, ThreadStatus.READY);
-  logger.info(logMessage);
+  logger.warn(logMessage);
 }
 
 async function handleInterruptTurnRequest(
