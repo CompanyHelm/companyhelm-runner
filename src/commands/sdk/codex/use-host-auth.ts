@@ -10,6 +10,7 @@ export async function runSdkCodexUseHostAuthCommand(
   cfg: Config = configSchema.parse({}),
   overrides: Partial<SetCodexHostAuthDependencies> = {},
 ): Promise<void> {
+  cfg = configSchema.parse(cfg);
   const deps: SetCodexHostAuthDependencies = { ...defaultSetCodexHostAuthDependencies, ...overrides };
   const authPath = await runSetCodexHostAuth(cfg, deps);
   console.log(`Codex SDK configured with host authentication using ${authPath}.`);

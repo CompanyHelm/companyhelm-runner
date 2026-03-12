@@ -10,6 +10,7 @@ export async function runSdkCodexUseDedicatedAuthCommand(
   cfg: Config = configSchema.parse({}),
   overrides: Partial<UseDedicatedCodexAuthDependencies> = {},
 ): Promise<void> {
+  cfg = configSchema.parse(cfg);
   const deps: UseDedicatedCodexAuthDependencies = { ...defaultUseDedicatedCodexAuthDependencies, ...overrides };
   await runUseDedicatedCodexAuth(cfg, deps);
 }
