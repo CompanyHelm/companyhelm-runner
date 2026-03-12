@@ -15,3 +15,12 @@ test("runner help uses the companyhelm-runner command name", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Usage: companyhelm-runner/);
 });
+
+test("runner help lists the companyhelm-runner command alias", () => {
+  const result = spawnSync(process.execPath, [cliEntryPoint, "--help"], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /companyhelm-runner \[options\]/);
+});
