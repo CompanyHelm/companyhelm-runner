@@ -1,7 +1,8 @@
 import type { Command } from "commander";
 import { addRunnerStartOptions } from "./runner/common.js";
 import { registerLogsCommand } from "./logs.js";
-import { registerRunnerCommands } from "./runner/register-runner-commands.js";
+import { registerRunnerStartCommand } from "./runner/start.js";
+import { registerRunnerStopCommand } from "./runner/stop.js";
 import { runRunnerStartCommand } from "./runner/start.js";
 import { registerShellCommand } from "./shell.js";
 import { registerSdkCommands } from "./sdk/register-sdk-commands.js";
@@ -14,7 +15,8 @@ export function registerCommands(program: Command): void {
       .command("companyhelm-runner")
       .description("Alias for starting the local CompanyHelm runner."),
   ).action(runRunnerStartCommand);
-  registerRunnerCommands(program);
+  registerRunnerStartCommand(program);
+  registerRunnerStopCommand(program);
   registerStatusCommand(program);
   registerLogsCommand(program);
   registerThreadCommands(program);

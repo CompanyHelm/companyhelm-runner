@@ -33,3 +33,14 @@ test("runner help includes the logs command", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /\blogs\b/);
 });
+
+test("runner help exposes start and stop at the root level", () => {
+  const result = spawnSync(process.execPath, [cliEntryPoint, "--help"], {
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /\bstart\b/);
+  assert.match(result.stdout, /\bstop\b/);
+  assert.doesNotMatch(result.stdout, /\n\s+runner\s+/);
+});
