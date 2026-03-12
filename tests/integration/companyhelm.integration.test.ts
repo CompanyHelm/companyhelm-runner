@@ -813,7 +813,7 @@ test("companyhelm daemon mode detaches and prevents a second daemon from claimin
 
     const repositoryRoot = path.resolve(__dirname, "../..");
     const cliEntryPoint = path.join(repositoryRoot, "dist", "cli.js");
-    const daemonArgs = [cliEntryPoint, "runner", "start", "-d", "--server-url", `127.0.0.1:${started.port}/grpc`];
+    const daemonArgs = [cliEntryPoint, "start", "-d", "--server-url", `127.0.0.1:${started.port}/grpc`];
     const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
 
     const startResult = await waitForExit(
@@ -898,7 +898,7 @@ test("companyhelm status reports daemon liveness, pid, and log directory", async
 
     const repositoryRoot = path.resolve(__dirname, "../..");
     const cliEntryPoint = path.join(repositoryRoot, "dist", "cli.js");
-    const daemonArgs = [cliEntryPoint, "runner", "start", "-d", "--server-url", `127.0.0.1:${started.port}/grpc`];
+    const daemonArgs = [cliEntryPoint, "start", "-d", "--server-url", `127.0.0.1:${started.port}/grpc`];
     const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
     const logDirectory = resolveDefaultConfigDirectory(homeDirectory);
 
@@ -993,7 +993,7 @@ test("companyhelm runner stop terminates the recorded daemon process", async () 
 
     const repositoryRoot = path.resolve(__dirname, "../..");
     const cliEntryPoint = path.join(repositoryRoot, "dist", "cli.js");
-    const daemonArgs = [cliEntryPoint, "runner", "start", "-d", "--server-url", `127.0.0.1:${started.port}/grpc`];
+    const daemonArgs = [cliEntryPoint, "start", "-d", "--server-url", `127.0.0.1:${started.port}/grpc`];
     const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
 
     await waitForExit(
@@ -1020,7 +1020,7 @@ test("companyhelm runner stop terminates the recorded daemon process", async () 
     daemonPid = row.pid;
 
     const stopResult = await waitForExit(
-      spawn(process.execPath, [cliEntryPoint, "runner", "stop", "--state-db-path", stateDbPath], {
+      spawn(process.execPath, [cliEntryPoint, "stop", "--state-db-path", stateDbPath], {
         cwd: repositoryRoot,
         env: { ...process.env, HOME: homeDirectory },
         stdio: ["ignore", "pipe", "pipe"],
