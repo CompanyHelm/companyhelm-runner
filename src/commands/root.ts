@@ -2153,6 +2153,10 @@ async function resolveThreadAuthMode(cfg: Config): Promise<ThreadAuthMode> {
       throw new Error("Codex SDK is not configured.");
     }
 
+    if (codexSdk.authentication === "api-key") {
+      return "dedicated";
+    }
+
     if (codexSdk.authentication !== "host" && codexSdk.authentication !== "dedicated") {
       throw new Error(`Unsupported Codex authentication mode '${codexSdk.authentication}' for thread creation.`);
     }

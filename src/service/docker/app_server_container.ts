@@ -268,7 +268,7 @@ export class AppServerContainerService implements AppServerTransport {
     const hostDedicatedAuthPath = `${expandHome(cfg.config_directory)}/${cfg.codex.codex_auth_file_path}`;
 
     const mountArgs: string[] = [];
-    if (codexAuthMode === "dedicated") {
+    if (codexAuthMode === "dedicated" || codexAuthMode === "api-key") {
       if (!getHostInfo(hostDedicatedAuthPath).codexAuthExists) {
         throw new Error(`Dedicated Codex auth file was not found at ${hostDedicatedAuthPath}`);
       }
