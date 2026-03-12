@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { type Config } from "../../../config.js";
 import { getHostInfo } from "../../../service/host.js";
@@ -64,6 +64,58 @@ type ContainerizedCodexLoginOptions = {
   onOutput?: (output: string) => void;
 };
 
+function resolveContainerPath(pathValue: string, containerHome: string): string {
+  if (pathValue === "~") {
+    return containerHome;
+  }
+  if (pathValue.startsWith("~/")) {
+    return `${containerHome}${pathValue.slice(1)}`;
+  }
+  return pathValue;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function buildCodexLoginShellCommand(cfg: Config, loginCommand: string): string {
+  const hostInfo = getHostInfo(cfg.codex.codex_auth_path);
+  const containerAuthPath = resolveContainerPath(cfg.codex.codex_auth_path, cfg.agent_home_directory);
+
+  return [
+    `AGENT_USER=${shellQuote(cfg.agent_user)}`,
+    `AGENT_HOME=${shellQuote(cfg.agent_home_directory)}`,
+    `AGENT_UID=${shellQuote(String(hostInfo.uid))}`,
+    `AGENT_GID=${shellQuote(String(hostInfo.gid))}`,
+    `CODEX_AUTH_PATH=${shellQuote(containerAuthPath)}`,
+    `CODEX_LOGIN_COMMAND=${shellQuote(`source "$NVM_DIR/nvm.sh"; ${loginCommand}`)}`,
+    'EXISTING_UID_USER=""',
+    'if getent passwd "$AGENT_UID" >/dev/null 2>&1; then',
+    '  EXISTING_UID_USER="$(getent passwd "$AGENT_UID" | cut -d: -f1)"',
+    '  AGENT_USER="$EXISTING_UID_USER"',
+    'fi',
+    'AGENT_GROUP="$AGENT_USER"',
+    'if getent group "$AGENT_GID" >/dev/null 2>&1; then',
+    '  AGENT_GROUP="$(getent group "$AGENT_GID" | cut -d: -f1)"',
+    'elif getent group "$AGENT_USER" >/dev/null 2>&1; then',
+    '  groupmod -g "$AGENT_GID" "$AGENT_USER"',
+    '  AGENT_GROUP="$AGENT_USER"',
+    'else',
+    '  groupadd -g "$AGENT_GID" "$AGENT_USER"',
+    '  AGENT_GROUP="$AGENT_USER"',
+    'fi',
+    'if id -u "$AGENT_USER" >/dev/null 2>&1; then',
+    '  usermod -u "$AGENT_UID" -g "$AGENT_GROUP" -d "$AGENT_HOME" -s /bin/bash "$AGENT_USER" || true',
+    'else',
+    '  useradd -m -d "$AGENT_HOME" -u "$AGENT_UID" -g "$AGENT_GROUP" -s /bin/bash "$AGENT_USER"',
+    'fi',
+    'mkdir -p "$AGENT_HOME" "$(dirname "$CODEX_AUTH_PATH")"',
+    'chown -R "$AGENT_UID:$AGENT_GID" "$AGENT_HOME" "$(dirname "$CODEX_AUTH_PATH")" || true',
+    'export HOME="$AGENT_HOME"',
+    'exec sudo -n -E -H -u "$AGENT_USER" bash -lc "$CODEX_LOGIN_COMMAND"',
+  ].join("\n");
+}
+
 export function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
@@ -96,7 +148,7 @@ async function runContainerizedCodexLogin(
     mkdirSync(configDir, { recursive: true });
   }
   const destPath = join(configDir, cfg.codex.codex_auth_file_path);
-  const containerAuthPath = cfg.codex.codex_auth_path;
+  const containerAuthPath = resolveContainerPath(cfg.codex.codex_auth_path, cfg.agent_home_directory);
 
   let authCopied = false;
   let combinedOutput = "";
@@ -313,6 +365,7 @@ export async function runDedicatedCodexAuth(
   deps: DedicatedCodexAuthDependencies,
 ): Promise<string> {
   const containerName = `companyhelm-codex-auth-${Date.now()}`;
+  const loginCommand = buildCodexLoginShellCommand(cfg, "codex login --device-auth");
 
   deps.logInfo("Starting Codex login inside a container...");
   deps.logInfo("A browser URL and device code will appear -- open it to complete authentication.");
@@ -326,7 +379,7 @@ export async function runDedicatedCodexAuth(
       "bash",
       cfg.runtime_image,
       "-lc",
-      'source "$NVM_DIR/nvm.sh"; codex login --device-auth',
+      loginCommand,
     ],
   });
 
@@ -346,6 +399,7 @@ export async function runCodexApiKeyAuth(
   try {
     deps.logInfo("Starting Codex API key login inside a container...");
     const containerName = `companyhelm-codex-auth-${Date.now()}`;
+    const loginCommand = buildCodexLoginShellCommand(cfg, 'printf \'%s\\n\' "$CODEX_API_KEY" | codex login --with-api-key');
     const destPath = await runContainerizedCodexLogin(cfg, deps, {
       containerName,
       dockerArgs: [
@@ -358,7 +412,7 @@ export async function runCodexApiKeyAuth(
         "bash",
         cfg.runtime_image,
         "-lc",
-        'source "$NVM_DIR/nvm.sh"; printf \'%s\\n\' "$CODEX_API_KEY" | codex login --with-api-key',
+        loginCommand,
       ],
     });
     await setCodexApiKeyAuthInDb(db);
@@ -382,6 +436,7 @@ export async function runCodexDeviceCodeAuth(
     let onDeviceCodePromise: Promise<void> = Promise.resolve();
     deps.logInfo("Starting Codex device login inside a container...");
     const containerName = `companyhelm-codex-auth-${Date.now()}`;
+    const loginCommand = buildCodexLoginShellCommand(cfg, "codex login --device-auth");
     const destPath = await runContainerizedCodexLogin(cfg, deps, {
       containerName,
       dockerArgs: [
@@ -392,7 +447,7 @@ export async function runCodexDeviceCodeAuth(
         "bash",
         cfg.runtime_image,
         "-lc",
-        'source "$NVM_DIR/nvm.sh"; codex login --device-auth',
+        loginCommand,
       ],
       onOutput: (output) => {
         const deviceCode = extractCodexDeviceCodeFromOutput(output);
