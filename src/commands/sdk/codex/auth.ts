@@ -124,6 +124,42 @@ export function buildDockerMissingError(): Error {
   return new Error("Docker is not installed or not available on PATH. Install Docker and retry.");
 }
 
+function readSpawnSyncText(output: string | Buffer | null | undefined): string {
+  if (typeof output === "string") {
+    return output.trim();
+  }
+  if (Buffer.isBuffer(output)) {
+    return output.toString("utf8").trim();
+  }
+  return "";
+}
+
+function describeSpawnSyncFailure(command: string, args: string[], result: ReturnType<typeof spawnSync>): string {
+  if (isErrnoException(result.error)) {
+    return `${command} ${args.join(" ")} failed to start: ${result.error.message}`;
+  }
+
+  const parts: string[] = [`${command} ${args.join(" ")}`];
+  if (typeof result.status === "number") {
+    parts.push(`exit code ${result.status}`);
+  }
+  if (result.signal) {
+    parts.push(`signal ${result.signal}`);
+  }
+
+  const stderr = readSpawnSyncText(result.stderr);
+  if (stderr.length > 0) {
+    parts.push(`stderr: ${stderr}`);
+  }
+
+  const stdout = readSpawnSyncText(result.stdout);
+  if (stdout.length > 0) {
+    parts.push(`stdout: ${stdout}`);
+  }
+
+  return parts.join(", ");
+}
+
 export function ensureDockerAvailable(spawnSyncCommand: typeof spawnSync): void {
   const result = spawnSyncCommand("docker", ["--version"], { stdio: "ignore" });
   if (isErrnoException(result.error) && result.error.code === "ENOENT") {
@@ -152,6 +188,7 @@ async function runContainerizedCodexLogin(
 
   let authCopied = false;
   let combinedOutput = "";
+  let lastCopyFailure: string | null = null;
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -165,21 +202,18 @@ async function runContainerizedCodexLogin(
     };
 
     const tryCopyAuthFile = (): boolean => {
-      const check = deps.spawnSyncCommand("docker", ["exec", options.containerName, "sh", "-c", `test -f ${containerAuthPath}`], {
-        stdio: "ignore",
-      });
-      if (check.status !== 0) {
-        return false;
-      }
-
-      const cpResult = deps.spawnSyncCommand("docker", ["cp", `${options.containerName}:${containerAuthPath}`, destPath], {
-        stdio: "ignore",
+      const cpArgs = ["cp", `${options.containerName}:${containerAuthPath}`, destPath];
+      const cpResult = deps.spawnSyncCommand("docker", cpArgs, {
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf8",
       });
       if (cpResult.status !== 0) {
+        lastCopyFailure = describeSpawnSyncFailure("docker", cpArgs, cpResult);
         return false;
       }
 
       authCopied = true;
+      lastCopyFailure = null;
       cleanup();
       return true;
     };
@@ -240,7 +274,14 @@ async function runContainerizedCodexLogin(
         resolveOnce();
         return;
       }
-      rejectOnce(new Error(`Codex login failed or was cancelled.${combinedOutput.trim().length > 0 ? ` Output: ${combinedOutput.trim()}` : ""}`));
+      const details: string[] = [];
+      if (lastCopyFailure) {
+        details.push(`Auth file copy failed from ${containerAuthPath}: ${lastCopyFailure}`);
+      }
+      if (combinedOutput.trim().length > 0) {
+        details.push(`Output: ${combinedOutput.trim()}`);
+      }
+      rejectOnce(new Error(`Codex login failed or was cancelled.${details.length > 0 ? ` ${details.join(" ")}` : ""}`));
     });
   });
 
