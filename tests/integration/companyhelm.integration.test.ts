@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -10,6 +11,7 @@ import { fileURLToPath } from "node:url";
 
 import { create } from "@bufbuild/protobuf";
 import * as grpc from "@grpc/grpc-js";
+import { createClient } from "@libsql/client";
 import { vi } from "vitest";
 import Dockerode from "dockerode";
 import { eq } from "drizzle-orm";
@@ -46,6 +48,9 @@ const __dirname = path.dirname(__filename);
 const TEST_HOME_ROOT = process.env.COMPANYHELM_TEST_HOME_ROOT
   ? path.resolve(process.env.COMPANYHELM_TEST_HOME_ROOT)
   : tmpdir();
+const REPOSITORY_ROOT = path.resolve(__dirname, "..", "..");
+const DRIZZLE_DIRECTORY = path.join(REPOSITORY_ROOT, "drizzle");
+const DRIZZLE_JOURNAL_PATH = path.join(DRIZZLE_DIRECTORY, "meta", "_journal.json");
 
 async function makeTemporaryHomeDirectory(prefix: string, homeRoot: string = TEST_HOME_ROOT): Promise<string> {
   const tempRoot = path.join(homeRoot, ".tmp-companyhelm-tests");
@@ -59,6 +64,49 @@ function resolveDefaultConfigDirectory(homeDirectory: string): string {
 
 function resolveDefaultStateDbPath(homeDirectory: string): string {
   return path.join(resolveDefaultConfigDirectory(homeDirectory), "state.db");
+}
+
+async function executeSqlStatements(client: ReturnType<typeof createClient>, sql: string): Promise<void> {
+  for (const statement of sql.split("--> statement-breakpoint").map((segment) => segment.trim()).filter(Boolean)) {
+    await client.execute(statement);
+  }
+}
+
+async function seedLegacyMigratedDatabase(
+  stateDbPath: string,
+  appliedTags: string[],
+  seedRows: (client: ReturnType<typeof createClient>) => Promise<void>,
+): Promise<void> {
+  await mkdir(path.dirname(stateDbPath), { recursive: true });
+  const journal = JSON.parse(await readFile(DRIZZLE_JOURNAL_PATH, "utf8")) as {
+    entries: Array<{ tag: string; when: number }>;
+  };
+  const client = createClient({ url: `file:${stateDbPath}` });
+
+  try {
+    for (const tag of appliedTags) {
+      const migrationSql = await readFile(path.join(DRIZZLE_DIRECTORY, `${tag}.sql`), "utf8");
+      await executeSqlStatements(client, migrationSql);
+    }
+
+    await client.execute(
+      'CREATE TABLE "__drizzle_migrations" (\n\t\t\tid SERIAL PRIMARY KEY,\n\t\t\thash text NOT NULL,\n\t\t\tcreated_at numeric\n\t\t)',
+    );
+
+    for (const tag of appliedTags) {
+      const journalEntry = journal.entries.find((entry) => entry.tag === tag);
+      assert.ok(journalEntry, `missing drizzle journal entry for migration '${tag}'`);
+      const migrationSql = await readFile(path.join(DRIZZLE_DIRECTORY, `${tag}.sql`), "utf8");
+      const hash = createHash("sha256").update(migrationSql).digest("hex");
+      await client.execute(
+        `INSERT INTO "__drizzle_migrations" ("hash", "created_at") VALUES ('${hash}', ${journalEntry.when})`,
+      );
+    }
+
+    await seedRows(client);
+  } finally {
+    client.close();
+  }
 }
 
 function waitForExit(
@@ -1067,6 +1115,61 @@ test("initDb reconciles legacy threads.sdk_id column to sdk_thread_id", async ()
       } finally {
         client.close();
       }
+    }
+  } finally {
+    await rm(homeDirectory, { recursive: true, force: true });
+  }
+});
+
+test("initDb migrates legacy threads and agent_sdks rows before status columns existed", async () => {
+  const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-legacy-status-columns-");
+
+  try {
+    const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
+
+    await seedLegacyMigratedDatabase(
+      stateDbPath,
+      ["0000_nice_stepford_cuckoos", "0001_third_vermin"],
+      async (client) => {
+        await client.execute("INSERT INTO agent_sdks (name, authentication) VALUES ('codex', 'host')");
+        await client.execute("INSERT INTO agents (id, name, sdk) VALUES ('agent-codex', 'Codex', 'codex')");
+        await client.execute(`
+          INSERT INTO threads (
+            id,
+            agent_id,
+            model,
+            reasoning_level,
+            workspace,
+            runtime_container,
+            dind_container,
+            home_directory,
+            uid,
+            gid
+          ) VALUES (
+            'thread-legacy-status',
+            'agent-codex',
+            'gpt-5-codex',
+            'medium',
+            '/tmp/companyhelm/thread-legacy-status',
+            'runtime-thread-legacy-status',
+            'dind-thread-legacy-status',
+            '/home/agent',
+            1000,
+            1000
+          )
+        `);
+      },
+    );
+
+    const { db, client } = await initDb(stateDbPath);
+    try {
+      const [sdk] = await db.select().from(agentSdks).where(eq(agentSdks.name, "codex")).limit(1);
+      const [thread] = await db.select().from(threads).where(eq(threads.id, "thread-legacy-status")).limit(1);
+
+      assert.equal(sdk?.status, "configured");
+      assert.equal(thread?.status, "ready");
+    } finally {
+      client.close();
     }
   } finally {
     await rm(homeDirectory, { recursive: true, force: true });
