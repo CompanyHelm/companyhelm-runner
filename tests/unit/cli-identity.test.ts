@@ -16,13 +16,13 @@ test("runner help uses the companyhelm-runner command name", () => {
   assert.match(result.stdout, /Usage: companyhelm-runner/);
 });
 
-test("runner help lists the companyhelm-runner command alias", () => {
+test("runner help does not list the removed companyhelm-runner command alias", () => {
   const result = spawnSync(process.execPath, [cliEntryPoint, "--help"], {
     encoding: "utf8",
   });
 
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /companyhelm-runner \[options\]/);
+  assert.doesNotMatch(result.stdout, /\n\s+companyhelm-runner\s+\[options\]/);
 });
 
 test("runner help includes the logs command", () => {
