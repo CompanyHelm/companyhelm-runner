@@ -2632,6 +2632,7 @@ async function handleDeleteThreadRequest(
   cfg: Config,
   commandChannel: ClientMessageSink,
   request: DeleteThreadRequest,
+  requestId: string | undefined,
   logger: Logger,
 ): Promise<void> {
   const deleteResult = await deleteThreadWithCleanup(cfg, request);
@@ -2639,15 +2640,15 @@ async function handleDeleteThreadRequest(
     logger.warn(
       `Delete requested for missing thread '${request.threadId}'. Treating as deleted.`,
     );
-    await sendThreadUpdate(commandChannel, request.threadId, ThreadStatus.DELETED);
+    await sendThreadUpdate(commandChannel, request.threadId, ThreadStatus.DELETED, requestId);
     return;
   }
   if (deleteResult.kind === "error") {
-    await sendRequestError(commandChannel, deleteResult.message);
+    await sendRequestError(commandChannel, deleteResult.message, requestId);
     return;
   }
 
-  await sendThreadUpdate(commandChannel, request.threadId, ThreadStatus.DELETED);
+  await sendThreadUpdate(commandChannel, request.threadId, ThreadStatus.DELETED, requestId);
 }
 
 async function reportNoRunningInterruptAsReady(
@@ -3291,7 +3292,7 @@ export async function runCommandLoop(
         );
         break;
       case "deleteThreadRequest":
-        await handleDeleteThreadRequest(cfg, commandMessageSink, serverMessage.request.value, logger);
+        await handleDeleteThreadRequest(cfg, commandMessageSink, serverMessage.request.value, requestId, logger);
         break;
       case "createUserMessageRequest":
         void handleCreateUserMessageRequest(
