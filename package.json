@@ -24,7 +24,7 @@
     "test": "npm run build && vitest run",
     "test:unit": "npm run build && vitest run tests/unit",
     "test:integration": "npm run build && vitest run tests/integration",
-    "test:system:device-auth": "npm run build && vitest run --reporter=verbose tests/system/codex-device-auth.system.test.ts",
+    "test:system:device-auth": "npm run build && COMPANYHELM_RUN_MANUAL_DEVICE_AUTH_TEST=1 vitest run --reporter=verbose tests/system/codex-device-auth.system.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "generate:codex-app-server": "docker run --rm --user \"$(id -u):$(id -g)\" -e CODEX_HOME=/workspace/node_modules/.cache/codex -v \"$PWD:/workspace\" -w /workspace companyhelm/runner:$(tr -d '[:space:]' < RUNTIME_IMAGE_VERSION) bash -lc 'mkdir -p /workspace/node_modules/.cache/codex; source \"$NVM_DIR/nvm.sh\"; codex app-server generate-ts --out src/generated/codex-app-server'"

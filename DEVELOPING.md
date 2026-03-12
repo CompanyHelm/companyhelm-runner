@@ -43,10 +43,10 @@ npm run test:integration
 Run the manual Codex device-auth system test:
 
 ```bash
-COMPANYHELM_RUN_MANUAL_DEVICE_AUTH_TEST=1 npm run test:system:device-auth
+npm run test:system:device-auth
 ```
 
-This test is intentionally skipped during normal `npm test` runs and in CI/PR environments. It launches the real runtime container, prints the live device code, waits for browser login completion, and then verifies that `auth.json` was copied back into the runner config directory and the Codex SDK state was marked `dedicated/configured`.
+This command explicitly enables the manual test for local runs, while the test file still refuses to run in CI/PR environments. It launches the real runtime container, prints the live device code, waits for browser login completion, and then verifies that `auth.json` was copied back into the runner config directory and the Codex SDK state was marked `dedicated/configured`.
 
 Run the built runner locally:
 
