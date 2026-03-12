@@ -406,6 +406,7 @@ export async function runDedicatedCodexAuth(
   deps: DedicatedCodexAuthDependencies,
 ): Promise<string> {
   const containerName = `companyhelm-codex-auth-${Date.now()}`;
+  ensureDockerAvailable(deps.spawnSyncCommand);
   const loginCommand = buildCodexLoginShellCommand(cfg, "codex login --device-auth");
 
   deps.logInfo("Starting Codex login inside a container...");
@@ -440,6 +441,7 @@ export async function runCodexApiKeyAuth(
   try {
     deps.logInfo("Starting Codex API key login inside a container...");
     const containerName = `companyhelm-codex-auth-${Date.now()}`;
+    ensureDockerAvailable(deps.spawnSyncCommand);
     const loginCommand = buildCodexLoginShellCommand(cfg, 'printf \'%s\\n\' "$CODEX_API_KEY" | codex login --with-api-key');
     const destPath = await runContainerizedCodexLogin(cfg, deps, {
       containerName,
@@ -477,6 +479,7 @@ export async function runCodexDeviceCodeAuth(
     let onDeviceCodePromise: Promise<void> = Promise.resolve();
     deps.logInfo("Starting Codex device login inside a container...");
     const containerName = `companyhelm-codex-auth-${Date.now()}`;
+    ensureDockerAvailable(deps.spawnSyncCommand);
     const loginCommand = buildCodexLoginShellCommand(cfg, "codex login --device-auth");
     const destPath = await runContainerizedCodexLogin(cfg, deps, {
       containerName,

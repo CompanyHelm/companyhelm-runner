@@ -85,6 +85,7 @@ async function selectStartupAuthMode(
 }
 
 export async function startup(cfg: Config = configSchema.parse({}), overrides: Partial<StartupDependencies> = {}) {
+  cfg = configSchema.parse(cfg);
   const deps: StartupDependencies = { ...defaultStartupDependencies, ...overrides };
   banner();
 
