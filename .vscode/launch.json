@@ -9,7 +9,6 @@
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "npm: build",
       "args": [
-        "runner",
         "start",
         "--server-url",
         "localhost:50051",
