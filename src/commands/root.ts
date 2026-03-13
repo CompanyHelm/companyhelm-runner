@@ -79,6 +79,7 @@ import { createLogger, type Logger } from "../utils/logger.js";
 import { expandHome } from "../utils/path.js";
 import { containsCtrlCInterruptInput, restoreInteractiveTerminalState } from "../utils/terminal.js";
 import { ensureWorkspaceAgentsMd } from "../service/workspace_agents.js";
+import { ensureRunnerStartupPreflight } from "../preflight/entrypoints.js";
 import type { RunnerStartCommandOptions } from "./runner/common.js";
 import {
   ensureCodexRunnerStartState,
@@ -3443,6 +3444,7 @@ export async function runRootCommand(
 ): Promise<void> {
   const logger = createLogger(options.logLevel ?? "INFO", { daemonMode: options.daemon ?? false });
   const cfg = buildRootConfig(options);
+  await ensureRunnerStartupPreflight(cfg);
   await ensureCodexRunnerStartState(cfg, {
     useDedicatedAuth: options.useDedicatedAuth,
     logInfo: (message: string) => logger.info(message),
