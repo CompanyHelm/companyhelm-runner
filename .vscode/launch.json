@@ -12,6 +12,8 @@
         "start",
         "--server-url",
         "localhost:50051",
+        "--agent-api-url",
+        "localhost:50052",
         "--log-level",
         "DEBUG",
         "--secret",
