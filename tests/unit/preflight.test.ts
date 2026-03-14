@@ -146,3 +146,41 @@ test("doctor fix prints the rerun summary after applying fixes", async () => {
   assert.deepEqual(applyFixesValues, [true]);
   assert.match(stdout.toString(), /Preflight status: passed/);
 });
+
+test("startup preflight can be explicitly skipped with an environment flag", async () => {
+  const {
+    RUNNER_STARTUP_PREFLIGHT_SKIP_ENV,
+    ensureRunnerStartupPreflight,
+  } = require("../../dist/preflight/entrypoints.js");
+
+  const previousValue = process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV];
+  process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV] = "1";
+
+  try {
+    await assert.doesNotReject(
+      ensureRunnerStartupPreflight(
+        {
+          use_host_docker_runtime: false,
+          dind_image: "docker:29-dind-rootless",
+        },
+        {
+          platform: "linux",
+          readSysctlValue: async (key: string) => {
+            const values: Record<string, string> = {
+              "kernel.unprivileged_userns_clone": "1",
+              "user.max_user_namespaces": "15338",
+              "kernel.apparmor_restrict_unprivileged_userns": "1",
+            };
+            return values[key] ?? null;
+          },
+        },
+      ),
+    );
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV];
+    } else {
+      process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV] = previousValue;
+    }
+  }
+});

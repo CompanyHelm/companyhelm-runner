@@ -9,6 +9,8 @@ interface RunnerPreflightDependencyOverrides {
   runShellCommand?: (command: string) => Promise<void>;
 }
 
+export const RUNNER_STARTUP_PREFLIGHT_SKIP_ENV = "COMPANYHELM_SKIP_RUNNER_STARTUP_PREFLIGHT";
+
 export interface RunRunnerPreflightOptions {
   cfg: Config;
   applyFixes?: boolean;
@@ -53,10 +55,19 @@ export function formatRunnerPreflightSummary(summary: RunnerPreflightSummary): s
   return lines.join("\n");
 }
 
+function shouldSkipRunnerStartupPreflight(): boolean {
+  const value = process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
 export async function ensureRunnerStartupPreflight(
   cfg: Config,
   overrides: RunnerPreflightDependencyOverrides = {},
 ): Promise<void> {
+  if (shouldSkipRunnerStartupPreflight()) {
+    return;
+  }
+
   const summary = await runRunnerPreflight({ cfg }, overrides);
   if (summary.passed) {
     return;

@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { create } from "@bufbuild/protobuf";
 import * as grpc from "@grpc/grpc-js";
 import { createClient } from "@libsql/client";
-import { vi } from "vitest";
+import { afterAll, beforeAll, vi } from "vitest";
 import Dockerode from "dockerode";
 import { eq } from "drizzle-orm";
 
@@ -42,6 +42,7 @@ const refreshModels = require("../../dist/service/sdk/refresh_models.js");
 const threadLifecycle = require("../../dist/service/thread_lifecycle.js");
 const { initDb } = require("../../dist/state/db.js");
 const { agentSdks, daemonState, llmModels, threadUserMessageRequestStore, threads } = require("../../dist/state/schema.js");
+const { RUNNER_STARTUP_PREFLIGHT_SKIP_ENV } = require("../../dist/preflight/entrypoints.js");
 const { isProcessRunning } = require("../../dist/utils/process.js");
 
 const __filename = fileURLToPath(import.meta.url);
@@ -52,6 +53,20 @@ const TEST_HOME_ROOT = process.env.COMPANYHELM_TEST_HOME_ROOT
 const REPOSITORY_ROOT = path.resolve(__dirname, "..", "..");
 const DRIZZLE_DIRECTORY = path.join(REPOSITORY_ROOT, "drizzle");
 const DRIZZLE_JOURNAL_PATH = path.join(DRIZZLE_DIRECTORY, "meta", "_journal.json");
+const previousStartupPreflightSkipValue = process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV];
+
+beforeAll(() => {
+  process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV] = "1";
+});
+
+afterAll(() => {
+  if (previousStartupPreflightSkipValue === undefined) {
+    delete process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV];
+    return;
+  }
+
+  process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV] = previousStartupPreflightSkipValue;
+});
 
 async function makeTemporaryHomeDirectory(prefix: string, homeRoot: string = TEST_HOME_ROOT): Promise<string> {
   const tempRoot = path.join(homeRoot, ".tmp-companyhelm-tests");
@@ -1452,6 +1467,12 @@ test("companyhelm root command returns requestError for createThreadRequest when
     threadLifecycle.ThreadContainerService.prototype,
     "createThreadContainers",
   );
+  const refreshModelsSpy = vi.spyOn(refreshModels, "refreshSdkModels").mockResolvedValue([
+    {
+      sdk: "codex",
+      modelCount: 1,
+    },
+  ]);
   const nativeSetTimeout = global.setTimeout;
   const reconnectDelaySpy = vi.spyOn(global, "setTimeout").mockImplementation(((handler: any, timeout?: any, ...args: any[]) => {
     if (shouldStopAfterValidation && timeout === 1_000) {
@@ -1517,6 +1538,7 @@ test("companyhelm root command returns requestError for createThreadRequest when
   } finally {
     reconnectDelaySpy.mockRestore();
     createThreadContainersSpy.mockRestore();
+    refreshModelsSpy.mockRestore();
     if (server) {
       await shutdownServer(server);
     }
