@@ -78,6 +78,7 @@ import { DAEMON_CHILD_ENV, DAEMON_LOG_PATH_ENV, resolveDaemonLogPath } from "../
 import { createLogger, type Logger } from "../utils/logger.js";
 import { expandHome } from "../utils/path.js";
 import { containsCtrlCInterruptInput, restoreInteractiveTerminalState } from "../utils/terminal.js";
+import { DaemonStartupWatchdog } from "../utils/daemon_startup_watchdog.js";
 import { ensureWorkspaceAgentsMd } from "../service/workspace_agents.js";
 import { ensureRunnerStartupPreflight } from "../preflight/entrypoints.js";
 import type { RunnerStartCommandOptions } from "./runner/common.js";
@@ -108,7 +109,7 @@ const YOLO_SANDBOX_MODE: SandboxMode = "danger-full-access";
 const YOLO_SANDBOX_POLICY: SandboxPolicy = { type: "dangerFullAccess" };
 const DOCKER_INTERNAL_HOSTNAME = "host.docker.internal";
 const LOCALHOST_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
-const DAEMON_STARTUP_TIMEOUT_MS = 15_000;
+const DAEMON_STARTUP_TIMEOUT_MS = 60_000;
 
 class RootCommandInterruptedError extends Error {
   constructor(message = "Root command interrupted.") {
@@ -147,6 +148,7 @@ interface WorkspaceGithubInstallationsPayload {
 
 interface RootCommandRuntimeOptions {
   onDaemonReady?: () => void;
+  onDaemonProgress?: (message: string) => void;
 }
 
 interface ThreadMcpHeaderConfig {
@@ -2088,7 +2090,11 @@ async function loadCodexSdkState(
   }
 }
 
-async function refreshCodexModelsForRegistration(cfg: Config, logger: Logger): Promise<string | null> {
+async function refreshCodexModelsForRegistration(
+  cfg: Config,
+  logger: Logger,
+  reportProgress?: (message: string) => void,
+): Promise<string | null> {
   const codexSdk = await loadCodexSdkState(cfg);
 
   if (!codexSdk || codexSdk.status !== "configured" || codexSdk.authentication === "unauthenticated") {
@@ -2097,9 +2103,15 @@ async function refreshCodexModelsForRegistration(cfg: Config, logger: Logger): P
   }
 
   try {
-    const results = await refreshSdkModels({ sdk: "codex", logger });
+    reportProgress?.("Refreshing Codex models from the local app-server.");
+    const results = await refreshSdkModels({
+      sdk: "codex",
+      logger,
+      imageStatusReporter: reportProgress,
+    });
     const modelCount = results[0]?.modelCount ?? 0;
     logger.info(`Refreshed Codex models from container app-server (${modelCount} models).`);
+    reportProgress?.(`Refreshed Codex models from container app-server (${modelCount} models).`);
     return null;
   } catch (error: unknown) {
     const cachedModelCount = await countSdkModels(cfg, "codex");
@@ -3375,21 +3387,21 @@ export async function runDetachedDaemonProcess(options: RootCommandOptions): Pro
       });
 
       let settled = false;
-      const timeout = setTimeout(() => {
+      const startupWatchdog = new DaemonStartupWatchdog(DAEMON_STARTUP_TIMEOUT_MS, () => {
         if (settled) {
           return;
         }
         settled = true;
         child.kill();
         reject(new Error(`Timed out waiting for daemon startup confirmation. See ${logPath}.`));
-      }, DAEMON_STARTUP_TIMEOUT_MS);
+      });
 
       const finish = (callback: () => void) => {
         if (settled) {
           return;
         }
         settled = true;
-        clearTimeout(timeout);
+        startupWatchdog.finish();
         callback();
       };
 
@@ -3407,6 +3419,11 @@ export async function runDetachedDaemonProcess(options: RootCommandOptions): Pro
         }
 
         const type = (message as { type?: unknown }).type;
+        if (type === "daemon-progress") {
+          startupWatchdog.bump();
+          return;
+        }
+
         if (type === "daemon-ready") {
           finish(() => {
             if (child.connected) {
@@ -3432,7 +3449,12 @@ export async function runDetachedDaemonProcess(options: RootCommandOptions): Pro
   }
 }
 
-export function sendDaemonParentMessage(message: { type: "daemon-ready" } | { type: "daemon-error"; message: string }): void {
+export function sendDaemonParentMessage(
+  message:
+    | { type: "daemon-progress"; message: string }
+    | { type: "daemon-ready" }
+    | { type: "daemon-error"; message: string },
+): void {
   if (typeof process.send === "function") {
     process.send(message);
   }
@@ -3450,7 +3472,11 @@ export async function runRootCommand(
     logInfo: (message: string) => logger.info(message),
   });
 
-  const codexRefreshErrorMessage = await refreshCodexModelsForRegistration(cfg, logger);
+  const codexRefreshErrorMessage = await refreshCodexModelsForRegistration(
+    cfg,
+    logger,
+    runtimeOptions?.onDaemonProgress,
+  );
   const registerRequest = await buildRegisterRunnerRequest(cfg, logger, codexRefreshErrorMessage);
   const apiCallOptions = buildGrpcAuthCallOptions(options.secret);
   if (options.daemon) {

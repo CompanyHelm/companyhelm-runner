@@ -20,6 +20,9 @@ export async function runRunnerStartCommand(options: RunnerStartCommandOptions):
           onDaemonReady: () => {
             sendDaemonParentMessage({ type: "daemon-ready" });
           },
+          onDaemonProgress: (message: string) => {
+            sendDaemonParentMessage({ type: "daemon-progress", message });
+          },
         }
       : undefined);
   } catch (error: unknown) {
