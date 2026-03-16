@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 const RUNTIME_AGENTS_TEMPLATE_PATH = "templates/runtime_agents.md.j2";
 const DEFAULT_HOME_DIRECTORY = "/home/agent";
+const DEFAULT_AGENT_API_URL = "http://host.docker.internal:3000/agent/v1";
+const DEFAULT_AGENT_TOKEN = "<thread-secret>";
 
 interface AgentsSection {
   marker: string;
@@ -50,19 +52,28 @@ function extractTopLevelSections(markdown: string): AgentsSection[] {
   return sections;
 }
 
-export function renderRuntimeAgentsMd(homeDirectory = DEFAULT_HOME_DIRECTORY): string {
+export function renderRuntimeAgentsMd(
+  homeDirectory = DEFAULT_HOME_DIRECTORY,
+  agentApiUrl = DEFAULT_AGENT_API_URL,
+  agentToken = DEFAULT_AGENT_TOKEN,
+): string {
   const template = readFileSync(resolveTemplatePath(), "utf8");
   return renderJinjaTemplate(template, {
     home_directory: homeDirectory,
+    agent_api_url: agentApiUrl,
+    agent_token: agentToken,
   }).trim() + "\n";
 }
 
 export function ensureWorkspaceAgentsMd(
   workspaceDirectory: string,
   homeDirectory = DEFAULT_HOME_DIRECTORY,
+  agentApiUrl = DEFAULT_AGENT_API_URL,
+  agentToken = DEFAULT_AGENT_TOKEN,
 ): void {
   mkdirSync(workspaceDirectory, { recursive: true });
   const agentsPath = join(workspaceDirectory, "AGENTS.md");
+  const lowercaseAgentsPath = join(workspaceDirectory, "agents.md");
 
   let existing = "";
   try {
@@ -73,7 +84,7 @@ export function ensureWorkspaceAgentsMd(
 
   let rendered = "";
   try {
-    rendered = renderRuntimeAgentsMd(homeDirectory);
+    rendered = renderRuntimeAgentsMd(homeDirectory, agentApiUrl, agentToken);
   } catch {
     return;
   }
@@ -95,5 +106,11 @@ export function ensureWorkspaceAgentsMd(
     writeFileSync(agentsPath, updated, "utf8");
   } catch {
     // Best-effort workspace instruction file.
+  }
+
+  try {
+    writeFileSync(lowercaseAgentsPath, rendered, "utf8");
+  } catch {
+    // Best-effort lowercase companion for runtime guidance.
   }
 }

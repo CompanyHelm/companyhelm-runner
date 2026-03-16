@@ -70,8 +70,8 @@ export const config = z.object({
         .describe("CompanyHelm control plane gRPC endpoint URL.")
         .default("https://api.companyhelm.com:50051"),
     agent_api_url: z.string()
-        .describe("CompanyHelm AgentTaskService gRPC endpoint URL used by companyhelm-agent inside runtime threads.")
-        .default("https://api.companyhelm.com:50052"),
+        .describe("CompanyHelm agent REST API base URL used inside runtime threads.")
+        .default("https://api.companyhelm.com/agent/v1"),
     // Max outbound gRPC client messages to hold while the command channel is disconnected.
     client_message_buffer_limit: z.number()
         .int()

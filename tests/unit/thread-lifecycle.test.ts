@@ -738,7 +738,7 @@ test("ThreadContainerService writes thread-scoped Codex config.toml into runtime
   assert.match(invocation.args[6], /mcp_servers\.context7/);
 });
 
-test("ThreadContainerService writes companyhelm-agent CLI config into runtime home", async () => {
+test("ThreadContainerService writes agent runtime config into runtime home", async () => {
   let invocation: { command: string; args: string[]; options: Record<string, unknown> } | null = null;
   const runCommand = (command: string, args: readonly string[], options: Record<string, unknown>) => {
     invocation = { command, args: [...args], options };
@@ -762,7 +762,7 @@ test("ThreadContainerService writes companyhelm-agent CLI config into runtime ho
       agentHomeDirectory: "/home/agent",
     },
     {
-      agent_api_url: "host.docker.internal:50052",
+      agent_api_url: "host.docker.internal:50052/agent/v1",
       token: "thread-secret-123",
     },
   );
@@ -777,7 +777,7 @@ test("ThreadContainerService writes companyhelm-agent CLI config into runtime ho
   assert.match(invocation.args[6], /CONFIG_PATH='\/home\/agent\/\.config\/companyhelm-agent-cli\/config\.json'/);
   assert.match(invocation.args[6], /printf '%s' "\$CONFIG_CONTENT" > "\$CONFIG_PATH"/);
   assert.match(invocation.args[6], /chmod 0600 "\$CONFIG_PATH"/);
-  assert.match(invocation.args[6], /"agent_api_url": "host\.docker\.internal:50052"/);
+  assert.match(invocation.args[6], /"agent_api_url": "host\.docker\.internal:50052\/agent\/v1"/);
   assert.match(invocation.args[6], /"token": "thread-secret-123"/);
 });
 
@@ -808,7 +808,6 @@ test("ThreadContainerService validates playwright chromium availability in runti
   assert.deepEqual(invocation.args.slice(0, 6), ["exec", "-u", "agent", "companyhelm-runtime-thread-tooling", "bash", "-lc"]);
   assert.equal(invocation.options.encoding, "utf8");
   assert.match(invocation.args[6], /if ! command -v codex >/);
-  assert.match(invocation.args[6], /if ! command -v companyhelm-agent >/);
   assert.match(invocation.args[6], /if ! command -v aws >/);
   assert.match(invocation.args[6], /if ! command -v playwright >/);
   assert.match(invocation.args[6], /PLAYWRIGHT_CACHE_DIR="\$\{PLAYWRIGHT_BROWSERS_PATH:-\$HOME\/\.cache\/ms-playwright\}"/);
@@ -938,7 +937,7 @@ test("ThreadContainerService surfaces runtime tooling validation failures", asyn
         agentUser: "agent",
         agentHomeDirectory: "/home/agent",
       }),
-    /Failed to validate runtime tooling \(nvm\/codex\/companyhelm-agent\/aws\/playwright\) in container 'companyhelm-runtime-thread-tooling-error' \(exit 10\): playwright missing/,
+    /Failed to validate runtime tooling \(nvm\/codex\/aws\/playwright\) in container 'companyhelm-runtime-thread-tooling-error' \(exit 10\): playwright missing/,
   );
 });
 
@@ -994,7 +993,7 @@ test("ThreadContainerService surfaces runtime Codex config write failures", asyn
   );
 });
 
-test("ThreadContainerService surfaces runtime companyhelm-agent config write failures", async () => {
+test("ThreadContainerService surfaces runtime agent config write failures", async () => {
   const runCommand = () =>
     ({
       pid: 1,
@@ -1017,11 +1016,11 @@ test("ThreadContainerService surfaces runtime companyhelm-agent config write fai
           agentHomeDirectory: "/home/agent",
         },
         {
-          agent_api_url: "host.docker.internal:50052",
+          agent_api_url: "host.docker.internal:50052/agent/v1",
           token: "thread-secret",
         },
       ),
-    /Failed to write runtime companyhelm-agent CLI config in container 'companyhelm-runtime-thread-agent-cli-error' \(exit 12\): write failed/,
+    /Failed to write runtime agent config in container 'companyhelm-runtime-thread-agent-cli-error' \(exit 12\): write failed/,
   );
 });
 

@@ -26,7 +26,7 @@ export function addRunnerStartOptions(command: Command): Command {
     .option("--server-url <url>", "CompanyHelm gRPC API URL override.")
     .option(
       "--agent-api-url <url>",
-      "Agent gRPC API URL for companyhelm-agent in runtime containers (localhost is rewritten to http://host.docker.internal).",
+      "Agent REST API base URL for runtime containers (localhost is rewritten to http://host.docker.internal).",
     )
     .option("--secret <secret>", "Bearer secret used as gRPC Authorization header.")
     .option("--state-db-path <path>", "State database path override (defaults to state.db under the active config directory).")
