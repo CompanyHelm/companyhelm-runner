@@ -283,12 +283,6 @@ function buildRuntimeToolingValidationScript(user: ThreadContainerUser): string 
   return [
     bootstrap,
     "",
-    'if ! command -v companyhelm-agent >/dev/null 2>&1; then',
-    '  echo "companyhelm-agent CLI is not available after sourcing nvm." >&2',
-    '  echo "Fix: install @companyhelm/agent-cli in the runtime image." >&2',
-    "  exit 1",
-    "fi",
-    "",
     'if ! command -v aws >/dev/null 2>&1; then',
     '  echo "aws CLI is not available in runtime PATH." >&2',
     '  echo "Fix: install awscli in the runtime image." >&2',
@@ -832,7 +826,7 @@ export class ThreadContainerService {
     const script = buildRuntimeToolingValidationScript(user);
     this.runDockerExecScript(
       ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
-      `Failed to validate runtime tooling (nvm/codex/companyhelm-agent/aws/playwright) in container '${name}'`,
+      `Failed to validate runtime tooling (nvm/codex/aws/playwright) in container '${name}'`,
     );
   }
 
@@ -872,7 +866,7 @@ export class ThreadContainerService {
     const script = buildRuntimeAgentCliConfigScript(user, config);
     this.runDockerExecScript(
       ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
-      `Failed to write runtime companyhelm-agent CLI config in container '${name}'`,
+      `Failed to write runtime agent config in container '${name}'`,
     );
   }
 

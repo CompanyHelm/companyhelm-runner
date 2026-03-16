@@ -21,14 +21,14 @@ test("config defaults CompanyHelm server URL", () => {
 
 test("config defaults agent API URL for companyhelm-agent", () => {
   const cfg = config.parse({});
-  assert.equal(cfg.agent_api_url, "https://api.companyhelm.com:50052");
+  assert.equal(cfg.agent_api_url, "https://api.companyhelm.com/agent/v1");
 });
 
 test("config accepts explicit agent API URL override", () => {
   const cfg = config.parse({
-    agent_api_url: "localhost:15052",
+    agent_api_url: "localhost:15052/agent/v1",
   });
-  assert.equal(cfg.agent_api_url, "localhost:15052");
+  assert.equal(cfg.agent_api_url, "localhost:15052/agent/v1");
 });
 
 test("config resolves default state db path under config directory", () => {

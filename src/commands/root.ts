@@ -2286,7 +2286,12 @@ async function handleCreateThreadRequest(
   }
 
   mkdirSync(threadDirectory, { recursive: true });
-  ensureWorkspaceAgentsMd(threadDirectory, cfg.agent_home_directory);
+  ensureWorkspaceAgentsMd(
+    threadDirectory,
+    cfg.agent_home_directory,
+    normalizeThreadAgentApiUrlForRuntime(cfg.agent_api_url),
+    cliSecret,
+  );
   writeWorkspaceThreadGitSkillsConfig(threadDirectory, threadGitSkillPackages, logger);
   writeWorkspaceThreadMcpConfig(threadDirectory, threadMcpServers, logger);
   writeWorkspaceThreadAgentCliConfig(threadDirectory, cliSecret, cfg.agent_api_url, logger);

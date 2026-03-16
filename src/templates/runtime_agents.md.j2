@@ -38,13 +38,28 @@ gh auth status --hostname github.com
 - For scripted PR creation/updates, always use `gh pr create --body-file <path>` and `gh pr edit --body-file <path>` instead of inline `--body` to avoid shell interpolation of markdown backticks.
 - DO NOT INSTALL PLAYWRIGHT IN THE RUNTIME IMAGE. Playwright CLI is already installed and available for browser automation tasks with Chromium pre-installed: `playwright open --browser=chromium ...`
 
-## CompanyHelm Agent CLI
+## Agent API
 
-- `companyhelm-agent` is pre-installed in the runtime image.
-- Thread bootstrap writes `{{home_directory}}/.config/companyhelm-agent-cli/config.json` with:
-  - `agent_api_url`: localhost targets are rewritten to `host.docker.internal` (for example `http://host.docker.internal:<port>`) for Docker-to-host access.
-  - `token`: sourced from the thread secret.
-- Example commands:
-  - `companyhelm-agent task get --task-id <id>`
-  - `companyhelm-agent task dependencies --task-id <id>`
-  - `companyhelm-agent task update-status --task-id <id> --status <draft|pending|in_progress|completed>`
+- Use the CompanyHelm agent REST API directly with `Authorization: Bearer {{agent_token}}`.
+- Agent API base URL: `{{agent_api_url}}`
+- The bearer token above is the existing thread secret.
+- Discovery starts here:
+
+```bash
+curl -H "Authorization: Bearer {{agent_token}}" \
+  {{agent_api_url}}/
+```
+
+- Markdown docs:
+
+```bash
+curl -H "Authorization: Bearer {{agent_token}}" \
+  {{agent_api_url}}/docs
+```
+
+- OpenAPI spec:
+
+```bash
+curl -H "Authorization: Bearer {{agent_token}}" \
+  {{agent_api_url}}/openapi.json
+```
