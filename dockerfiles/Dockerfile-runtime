@@ -118,7 +118,6 @@ RUN mkdir -p "$NVM_DIR" \
          @openai/codex \
          @playwright/cli@"${PLAYWRIGHT_CLI_VERSION}" \
          playwright@"${PLAYWRIGHT_VERSION}" \
-         @companyhelm/agent-cli \
     && npx playwright install --no-shell chromium \
     && CHROMIUM_BIN="$(find "${PLAYWRIGHT_BROWSERS_PATH}" -type f -path "*/chrome-linux/chrome" | head -n 1)" \
     && [[ -n "${CHROMIUM_BIN}" ]] \
