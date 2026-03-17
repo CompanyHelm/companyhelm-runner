@@ -98,11 +98,7 @@ export type RootCommandOptions = RunnerStartCommandOptions;
 const COMMAND_CHANNEL_CONNECT_RETRY_DELAY_MS = 1_000;
 const COMMAND_CHANNEL_OPEN_TIMEOUT_MS = 5_000;
 const TURN_COMPLETION_TIMEOUT_MS = 2 * 60 * 60_000;
-const GITHUB_INSTALLATIONS_SYNC_INTERVAL_MS = 5 * 60_000;
-const GITHUB_INSTALLATIONS_MIN_SYNC_INTERVAL_MS = 30_000;
-const GITHUB_INSTALLATIONS_REFRESH_WINDOW_MS = 15 * 60_000;
 const WORKSPACE_INSTALLATIONS_DIRECTORY = ".companyhelm";
-const WORKSPACE_INSTALLATIONS_FILENAME = "installations.json";
 const THREAD_GIT_SKILLS_CONFIG_FILENAME = "thread-git-skills.json";
 const THREAD_MCP_CONFIG_FILENAME = "thread-mcp.json";
 const THREAD_AGENT_CLI_CONFIG_FILENAME = "thread-agent-cli.json";
@@ -130,33 +126,6 @@ interface ThreadAppServerSession {
   sdkThreadId: string | null;
   rolloutPath: string | null;
   started: boolean;
-}
-
-interface RuntimeGithubInstallation {
-  installationId: string;
-  accessToken: string;
-  accessTokenExpiresUnixTimeMs: string;
-  accessTokenExpiration: string;
-  repositories: string[];
-}
-
-interface WorkspaceGithubInstallationsPayload {
-  synced_at: string;
-  installations: Array<{
-    installation_id: string;
-    access_token: string;
-    access_token_expires_unix_time_ms: string;
-    access_token_expiration: string;
-    repositories: string[];
-  }>;
-}
-
-interface TrackedThreadRuntimeTarget {
-  threadId: string;
-  runtimeContainer: string;
-  homeDirectory: string;
-  uid: number;
-  gid: number;
 }
 
 interface RootCommandRuntimeOptions {
@@ -653,108 +622,6 @@ export function extractThreadNameUpdateFromNotification(
 
 function isGrpcServiceError(error: unknown): error is grpc.ServiceError {
   return Boolean(error && typeof error === "object" && "code" in error);
-}
-
-function isUnimplementedGrpcMethod(error: unknown): boolean {
-  return isGrpcServiceError(error) && error.code === grpc.status.UNIMPLEMENTED;
-}
-
-function normalizeAccessTokenExpiration(accessTokenExpiresUnixTimeMs: bigint): {
-  accessTokenExpiresUnixTimeMs: string;
-  accessTokenExpiration: string;
-} {
-  const rawUnixTimeMs = Number(accessTokenExpiresUnixTimeMs);
-  const expirationUnixTimeMs = Number.isFinite(rawUnixTimeMs) && rawUnixTimeMs > 0
-    ? Math.floor(rawUnixTimeMs)
-    : Date.now() + 60 * 60_000;
-
-  return {
-    accessTokenExpiresUnixTimeMs: expirationUnixTimeMs.toString(),
-    accessTokenExpiration: new Date(expirationUnixTimeMs).toISOString(),
-  };
-}
-
-async function loadRuntimeGithubInstallations(
-  apiClient: CompanyhelmApiClient,
-  options: CompanyhelmApiCallOptions | undefined,
-  logger: Logger,
-): Promise<RuntimeGithubInstallation[]> {
-  let installationIds: bigint[] = [];
-  try {
-    const listResponse = await apiClient.listGithubInstallationsForRunner(options);
-    installationIds = listResponse.installations.map((installation) => installation.installationId);
-  } catch (error: unknown) {
-    const warning = isUnimplementedGrpcMethod(error)
-      ? "CompanyHelm API does not implement listGithubInstallationsForRunner yet."
-      : `Failed to fetch GitHub installations: ${toErrorMessage(error)}`;
-    logger.warn(warning);
-    return [];
-  }
-
-  const installationDetails: RuntimeGithubInstallation[] = [];
-
-  for (const installationId of installationIds) {
-    try {
-      const accessTokenResponse = await apiClient.getGithubInstallationAccessTokenForRunner(installationId, options);
-      const accessToken = accessTokenResponse.accessToken.trim();
-      if (!accessToken) {
-        logger.warn(`Received empty GitHub access token for installation ${installationId.toString()}; skipping.`);
-        continue;
-      }
-
-      const expiration = normalizeAccessTokenExpiration(accessTokenResponse.accessTokenExpiresUnixTimeMs);
-      const repositories = [...new Set(accessTokenResponse.repositories.filter((repository) => repository.trim().length > 0))]
-        .sort((left, right) => left.localeCompare(right));
-      installationDetails.push({
-        installationId: accessTokenResponse.installationId.toString(),
-        accessToken,
-        accessTokenExpiresUnixTimeMs: expiration.accessTokenExpiresUnixTimeMs,
-        accessTokenExpiration: expiration.accessTokenExpiration,
-        repositories,
-      });
-    } catch (error: unknown) {
-      const warning = isUnimplementedGrpcMethod(error)
-        ? "CompanyHelm API does not implement getGithubInstallationAccessTokenForRunner yet."
-        : `Failed to fetch GitHub access token for installation ${installationId.toString()}: ${toErrorMessage(error)}`;
-      logger.warn(warning);
-    }
-  }
-
-  return installationDetails;
-}
-
-function buildWorkspaceGithubInstallationsPayload(
-  installations: RuntimeGithubInstallation[],
-): WorkspaceGithubInstallationsPayload {
-  return {
-    synced_at: new Date().toISOString(),
-    installations: installations.map((installation) => ({
-      installation_id: installation.installationId,
-      access_token: installation.accessToken,
-      access_token_expires_unix_time_ms: installation.accessTokenExpiresUnixTimeMs,
-      access_token_expiration: installation.accessTokenExpiration,
-      repositories: installation.repositories,
-    })),
-  };
-}
-
-function writeWorkspaceGithubInstallationsPayload(
-  workspaceDirectory: string,
-  payload: WorkspaceGithubInstallationsPayload,
-  logger: Logger,
-): void {
-  const installationsDirectory = join(workspaceDirectory, WORKSPACE_INSTALLATIONS_DIRECTORY);
-  const installationsPath = join(installationsDirectory, WORKSPACE_INSTALLATIONS_FILENAME);
-  const temporaryPath = `${installationsPath}.tmp`;
-  const serializedPayload = `${JSON.stringify(payload, null, 2)}\n`;
-
-  try {
-    mkdirSync(installationsDirectory, { recursive: true });
-    writeFileSync(temporaryPath, serializedPayload, "utf8");
-    renameSync(temporaryPath, installationsPath);
-  } catch (error: unknown) {
-    logger.warn(`Failed writing GitHub installations file for workspace '${workspaceDirectory}': ${toErrorMessage(error)}`);
-  }
 }
 
 function isHttpsRepositoryUrl(value: string): boolean {
@@ -1574,102 +1441,6 @@ async function reconcileThreadRunningStateBeforeUserMessage(
   };
 }
 
-async function listTrackedThreadRuntimeTargets(cfg: Config, logger: Logger): Promise<TrackedThreadRuntimeTarget[]> {
-  const { db, client } = await initDb(cfg.state_db_path);
-  try {
-    return await db
-      .select({
-        threadId: threads.id,
-        runtimeContainer: threads.runtimeContainer,
-        homeDirectory: threads.homeDirectory,
-        uid: threads.uid,
-        gid: threads.gid,
-      })
-      .from(threads)
-      .all();
-  } catch (error: unknown) {
-    logger.warn(`Failed to list tracked thread runtimes for GitHub installation sync: ${toErrorMessage(error)}`);
-    return [];
-  } finally {
-    client.close();
-  }
-}
-
-function resolveGithubInstallationsSyncDelayMs(installations: RuntimeGithubInstallation[]): number {
-  let syncDelayMs = GITHUB_INSTALLATIONS_SYNC_INTERVAL_MS;
-  const now = Date.now();
-
-  for (const installation of installations) {
-    const expirationUnixTimeMs = Number(installation.accessTokenExpiresUnixTimeMs);
-    if (!Number.isFinite(expirationUnixTimeMs) || expirationUnixTimeMs <= 0) {
-      continue;
-    }
-
-    const refreshInMs = expirationUnixTimeMs - now - GITHUB_INSTALLATIONS_REFRESH_WINDOW_MS;
-    const boundedRefreshDelayMs = Math.max(
-      GITHUB_INSTALLATIONS_MIN_SYNC_INTERVAL_MS,
-      Math.min(GITHUB_INSTALLATIONS_SYNC_INTERVAL_MS, refreshInMs),
-    );
-    syncDelayMs = Math.min(syncDelayMs, boundedRefreshDelayMs);
-  }
-
-  return Math.max(
-    GITHUB_INSTALLATIONS_MIN_SYNC_INTERVAL_MS,
-    Math.min(GITHUB_INSTALLATIONS_SYNC_INTERVAL_MS, syncDelayMs),
-  );
-}
-
-async function syncGithubInstallationsForRuntimeTargets(
-  cfg: Config,
-  apiClient: CompanyhelmApiClient,
-  options: CompanyhelmApiCallOptions | undefined,
-  runtimeTargets: TrackedThreadRuntimeTarget[],
-  logger: Logger,
-): Promise<RuntimeGithubInstallation[]> {
-  const uniqueTargets = [
-    ...new Map(
-      runtimeTargets
-        .filter((target) => target.runtimeContainer.trim().length > 0)
-        .map((target) => [target.runtimeContainer, target] as const),
-    ).values(),
-  ];
-  if (uniqueTargets.length === 0) {
-    return [];
-  }
-
-  const installations = await loadRuntimeGithubInstallations(apiClient, options, logger);
-  const payload = buildWorkspaceGithubInstallationsPayload(installations);
-  const containerService = new ThreadContainerService();
-
-  for (const target of uniqueTargets) {
-    try {
-      if (!await containerService.isContainerRunning(target.runtimeContainer)) {
-        continue;
-      }
-
-      await containerService.ensureRuntimeContainerGithubInstallations(
-        target.runtimeContainer,
-        {
-          uid: target.uid,
-          gid: target.gid,
-          agentUser: cfg.agent_user,
-          agentHomeDirectory: target.homeDirectory,
-        },
-        payload,
-      );
-    } catch (error: unknown) {
-      logger.warn(
-        `Failed syncing GitHub installations into runtime container '${target.runtimeContainer}': ${toErrorMessage(error)}`,
-      );
-    }
-  }
-
-  logger.debug(
-    `Synced ${installations.length} GitHub installation token(s) to ${uniqueTargets.length} runtime container(s).`,
-  );
-  return installations;
-}
-
 async function waitForAbort(signal: AbortSignal, delayMs: number): Promise<void> {
   if (signal.aborted) {
     return;
@@ -1689,34 +1460,6 @@ async function waitForAbort(signal: AbortSignal, delayMs: number): Promise<void>
 
     signal.addEventListener("abort", handleAbort);
   });
-}
-
-async function runGithubInstallationsSyncLoop(
-  cfg: Config,
-  apiClient: CompanyhelmApiClient,
-  options: CompanyhelmApiCallOptions | undefined,
-  logger: Logger,
-  signal: AbortSignal,
-): Promise<void> {
-  while (!signal.aborted) {
-    let nextDelayMs = GITHUB_INSTALLATIONS_SYNC_INTERVAL_MS;
-    try {
-      const runtimeTargets = await listTrackedThreadRuntimeTargets(cfg, logger);
-      const installations = await syncGithubInstallationsForRuntimeTargets(
-        cfg,
-        apiClient,
-        options,
-        runtimeTargets,
-        logger,
-      );
-      nextDelayMs = resolveGithubInstallationsSyncDelayMs(installations);
-    } catch (error: unknown) {
-      logger.warn(`GitHub installation sync loop iteration failed: ${toErrorMessage(error)}`);
-      nextDelayMs = GITHUB_INSTALLATIONS_MIN_SYNC_INTERVAL_MS;
-    }
-
-    await waitForAbort(signal, nextDelayMs);
-  }
 }
 
 function normalizeReasoningEffort(value: string | undefined): ReasoningEffort | null {
@@ -2494,21 +2237,6 @@ async function handleCreateThreadRequest(
         threadAgentCliConfig,
       );
     }
-    await syncGithubInstallationsForRuntimeTargets(
-      cfg,
-      apiClient,
-      apiCallOptions,
-      [
-        {
-          threadId: threadState.id,
-          runtimeContainer: threadState.runtimeContainer,
-          homeDirectory: threadState.homeDirectory,
-          uid: threadState.uid,
-          gid: threadState.gid,
-        },
-      ],
-      logger,
-    );
     if (!appServerSession.started) {
       await containerService.ensureRuntimeContainerCodexConfig(
         threadState.runtimeContainer,
@@ -3654,8 +3382,6 @@ export async function runRootCommand(
       const apiClient = new CompanyhelmApiClient({ apiUrl: cfg.companyhelm_api_url, logger });
       activeApiClient = apiClient;
       let commandChannel: CompanyhelmCommandChannel | null = null;
-      let githubInstallationsSyncAbortController: AbortController | null = null;
-      let githubInstallationsSyncTask: Promise<void> | null = null;
 
       try {
         reconnectAttempt += 1;
@@ -3672,19 +3398,6 @@ export async function runRootCommand(
           logger.info(`Connected to CompanyHelm API at ${cfg.companyhelm_api_url}`);
         }
         reconnectAttempt = 0;
-
-        githubInstallationsSyncAbortController = new AbortController();
-        githubInstallationsSyncTask = runGithubInstallationsSyncLoop(
-          cfg,
-          apiClient,
-          apiCallOptions,
-          logger,
-          githubInstallationsSyncAbortController.signal,
-        ).catch((error: unknown) => {
-          if (!githubInstallationsSyncAbortController?.signal.aborted) {
-            logger.warn(`GitHub installation sync loop exited unexpectedly: ${toErrorMessage(error)}`);
-          }
-        });
 
         await raceWithAbort(
           runCommandLoop(cfg, commandChannel, commandMessageSink, apiClient, apiCallOptions, logger),
@@ -3708,10 +3421,6 @@ export async function runRootCommand(
             "Retrying...",
         );
       } finally {
-        if (githubInstallationsSyncAbortController) {
-          githubInstallationsSyncAbortController.abort();
-        }
-        void githubInstallationsSyncTask;
         if (commandChannel) {
           commandChannel.cancel();
           commandMessageSink.unbind(commandChannel);

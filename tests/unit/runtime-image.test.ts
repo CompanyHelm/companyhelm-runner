@@ -5,6 +5,8 @@ test("runtime Dockerfile does not bundle companyhelm agent cli", () => {
   const dockerfile = readFileSync(new URL("../../dockerfiles/Dockerfile-runtime", import.meta.url), "utf8");
 
   assert.equal(dockerfile.includes("@companyhelm/agent-cli"), false);
+  assert.equal(dockerfile.includes("scripts/runtime/list-installations"), false);
+  assert.equal(dockerfile.includes("scripts/runtime/gh-use-installation"), false);
 });
 
 test("thread container docs describe the current runtime tooling set", () => {

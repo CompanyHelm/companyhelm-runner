@@ -19,11 +19,8 @@ import { eq } from "drizzle-orm";
 const require = createRequire(import.meta.url);
 const {
   ClientMessageSchema,
-  GithubInstallationAccessTokenResponseSchema: GetGithubInstallationAccessTokenForRunnerResponseSchema,
-  GithubInstallationSchema: GithubInstallationForRunnerSchema,
   ItemStatus,
   ItemType,
-  ListGithubInstallationsResponseSchema: ListGithubInstallationsForRunnerResponseSchema,
   RegisterRunnerRequestSchema,
   RegisterRunnerResponseSchema,
   ServerMessageSchema,
@@ -57,17 +54,12 @@ const previousStartupPreflightSkipValue = process.env[RUNNER_STARTUP_PREFLIGHT_S
 const ensureRuntimeContainerThreadMetadataGlobalSpy = vi
   .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadMetadata")
   .mockImplementation(async () => undefined);
-const ensureRuntimeContainerGithubInstallationsGlobalSpy = vi
-  .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerGithubInstallations")
-  .mockImplementation(async () => undefined);
-
 beforeAll(() => {
   process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV] = "1";
 });
 
 afterAll(() => {
   ensureRuntimeContainerThreadMetadataGlobalSpy.mockRestore();
-  ensureRuntimeContainerGithubInstallationsGlobalSpy.mockRestore();
   if (previousStartupPreflightSkipValue === undefined) {
     delete process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV];
     return;
@@ -449,6 +441,16 @@ function resolveSupportedHostDockerPath(): string | null {
   return null;
 }
 
+function ensureDockerImageAvailable(image: string): void {
+  const inspectResult = spawnSync("docker", ["image", "inspect", image], { encoding: "utf8" });
+  if (inspectResult.status === 0) {
+    return;
+  }
+
+  const pullResult = spawnSync("docker", ["pull", image], { encoding: "utf8" });
+  assert.equal(pullResult.status, 0, pullResult.stderr || pullResult.stdout);
+}
+
 test("ThreadContainerService renames existing runtime uid identity to agent without moving the old home", async () => {
   if (!(await isDockerAvailable())) {
     return;
@@ -471,6 +473,7 @@ test("ThreadContainerService renames existing runtime uid identity to agent with
   };
 
   try {
+    ensureDockerImageAvailable(runtimeImage);
     await containerService.createThreadContainers({
       dindImage: "docker:29-dind-rootless",
       runtimeImage,
@@ -514,7 +517,7 @@ test("ThreadContainerService renames existing runtime uid identity to agent with
   } finally {
     await containerService.forceRemoveContainer(names.runtime).catch(() => undefined);
   }
-});
+}, 180_000);
 
 test("CompanyhelmApiClient registers first and streams messages both directions", async () => {
   let registerRequest: any = null;
@@ -1649,12 +1652,12 @@ test("companyhelm root command returns threadUpdate deleted for deleteThreadRequ
   }
 });
 
-test("companyhelm root command keeps runner metadata out of the workspace and prepends runtime prompt instructions", async () => {
-  const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-thread-github-installations-");
+test("companyhelm root command keeps runner metadata out of the workspace and avoids GitHub-specific runtime instructions", async () => {
+  const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-thread-runtime-metadata-");
   const sharedWorkspaceDirectory = path.join(homeDirectory, "shared-workspace");
   let server: grpc.Server | undefined;
   const previousHome = process.env.HOME;
-  const reconnectStopError = new Error("stop root command after github installation sync validation");
+  const reconnectStopError = new Error("stop root command after runtime metadata validation");
   const nativeSetTimeout = global.setTimeout;
   let shouldStopAfterValidation = false;
   const reconnectDelaySpy = vi.spyOn(global, "setTimeout").mockImplementation(((handler: any, timeout?: any, ...args: any[]) => {
@@ -1698,14 +1701,14 @@ test("companyhelm root command keeps runner metadata out of the workspace and pr
   const startThreadWithResponseSpy = vi
     .spyOn(AppServerService.prototype, "startThreadWithResponse")
     .mockImplementation(async () => ({
-      id: "github-installations-thread-start",
-      result: {
-        thread: {
-          id: "sdk-thread-github-installations",
-          path: "/workspace/rollouts/github-installations.json",
-        },
-      },
-    }));
+          id: "runtime-metadata-thread-start",
+          result: {
+            thread: {
+              id: "sdk-thread-runtime-metadata",
+              path: "/workspace/rollouts/runtime-metadata.json",
+            },
+          },
+        }));
 
   try {
     process.env.HOME = homeDirectory;
@@ -1718,29 +1721,6 @@ test("companyhelm root command keeps runner metadata out of the workspace and pr
     const started = await startFakeServer("/grpc", {
       registerRunner(call, callback) {
         callback(null, create(RegisterRunnerResponseSchema, {}));
-      },
-      listGithubInstallationsForRunner(_call, callback) {
-        callback(
-          null,
-          create(ListGithubInstallationsForRunnerResponseSchema, {
-            installations: [
-              create(GithubInstallationForRunnerSchema, {
-                installationId: BigInt(112102565),
-              }),
-            ],
-          }),
-        );
-      },
-      getGithubInstallationAccessTokenForRunner(call, callback) {
-        callback(
-          null,
-          create(GetGithubInstallationAccessTokenForRunnerResponseSchema, {
-            installationId: call.request.installationId,
-            accessToken: "ghs_test_installation_token",
-            accessTokenExpiresUnixTimeMs: BigInt(1767142800000),
-            repositories: ["acme/backend", "acme/frontend"],
-          }),
-        );
       },
       controlChannel(call) {
         call.write(
@@ -1794,7 +1774,7 @@ test("companyhelm root command keeps runner metadata out of the workspace and pr
         workspacePath: sharedWorkspaceDirectory,
       }),
       (error: unknown) => error === reconnectStopError,
-      "expected root command to stop after github installation sync validation",
+          "expected root command to stop after runtime metadata validation",
     );
 
     assert.equal(receivedRequestError, null, "did not expect requestError during createThread flow");
@@ -1849,12 +1829,9 @@ test("companyhelm root command keeps runner metadata out of the workspace and pr
       threadGitSkills.map((skill) => skill.linkName),
       ["brainstorming", "systematic-debugging"],
     );
-    assert.equal(renderedDeveloperInstructions.includes("## GitHub Installations"), true);
+    assert.equal(renderedDeveloperInstructions.includes("## GitHub Installations"), false);
     assert.equal(renderedDeveloperInstructions.includes("## Shared Workspace"), true);
-    assert.equal(
-      renderedDeveloperInstructions.includes("/home/agent/.companyhelm/agent/installations.json"),
-      true,
-    );
+    assert.equal(renderedDeveloperInstructions.includes("/home/agent/.companyhelm/agent/installations.json"), false);
     assert.equal(renderedDeveloperInstructions.includes("thread-secret-github-installations"), true);
   } finally {
     reconnectDelaySpy.mockRestore();
