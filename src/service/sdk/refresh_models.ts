@@ -22,7 +22,19 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isRuntimeImageUnavailable(error: unknown): boolean {
+  const message = toErrorMessage(error);
+  return /manifest\s+for .* not found|manifest unknown/i.test(message);
+}
+
 export function formatSdkModelRefreshFailure(sdk: string, error: unknown): string {
+  if (isRuntimeImageUnavailable(error)) {
+    return (
+      `Failed to refresh ${sdk} models from the local Codex app-server: ${toErrorMessage(error)}. ` +
+      "The configured runner image is not available from Docker yet. Wait for the image publish to finish or set runtime_image to an available tag, then retry."
+    );
+  }
+
   return (
     `Failed to refresh ${sdk} models from the local Codex app-server: ${toErrorMessage(error)}. ` +
     "Verify the runner image can start Codex app-server with valid auth, then retry."
