@@ -31,7 +31,7 @@ export function formatSdkModelRefreshFailure(sdk: string, error: unknown): strin
   if (isRuntimeImageUnavailable(error)) {
     return (
       `Failed to refresh ${sdk} models from the local Codex app-server: ${toErrorMessage(error)}. ` +
-      "The configured runner image is not available from Docker yet. Wait for the image publish to finish or set runtime_image to an available tag, then retry."
+      "The configured runner image is not available from Docker yet. The Docker build/push may still be running. Wait for the image publish to finish or set runtime_image to an available tag, then retry."
     );
   }
 

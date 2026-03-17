@@ -14,7 +14,6 @@ import { getHostInfo } from "../host.js";
 
 const DEFAULT_APP_SERVER_COMMAND = buildCodexAppServerCommand();
 const BOOTSTRAP_TEMPLATE_PATH = "templates/app_server_bootstrap.sh.j2";
-const REMOTE_IMAGE_MANIFEST_RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 15_000, 30_000];
 
 function resolveContainerPath(path: string, containerHome: string): string {
   if (path === "~") {
@@ -58,8 +57,6 @@ export class AppServerContainerService implements AppServerTransport {
   private readonly messageQueue = new AsyncQueue<AppServerTransportEvent>();
   private readonly docker: Dockerode;
   private readonly imageStatusReporter?: (message: string) => void;
-  private readonly wait: (delayMs: number) => Promise<void>;
-  private readonly imagePullRetryDelaysMs: readonly number[];
 
   private child: ChildProcessWithoutNullStreams | null = null;
   private containerName: string | null = null;
@@ -71,13 +68,9 @@ export class AppServerContainerService implements AppServerTransport {
   constructor(options?: {
     docker?: Dockerode;
     imageStatusReporter?: (message: string) => void;
-    wait?: (delayMs: number) => Promise<void>;
-    imagePullRetryDelaysMs?: readonly number[];
   }) {
     this.docker = options?.docker ?? new Dockerode();
     this.imageStatusReporter = options?.imageStatusReporter;
-    this.wait = options?.wait ?? ((delayMs: number) => new Promise((resolve) => setTimeout(resolve, delayMs)));
-    this.imagePullRetryDelaysMs = options?.imagePullRetryDelaysMs ?? REMOTE_IMAGE_MANIFEST_RETRY_DELAYS_MS;
   }
 
   private reportImageStatus(message: string): void {
@@ -142,6 +135,12 @@ export class AppServerContainerService implements AppServerTransport {
   private static isRemoteManifestUnknown(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return /manifest\s+for .* not found|manifest unknown/i.test(message);
+  }
+
+  private static buildRemoteManifestUnknownError(image: string): Error {
+    return new Error(
+      `Docker image '${image}' is not available remotely yet. The Docker build/push may still be running. Wait for the image publish to finish, or set runtime_image to an available tag, then retry.`,
+    );
   }
 
   private async pullImage(image: string): Promise<void> {
@@ -244,24 +243,13 @@ export class AppServerContainerService implements AppServerTransport {
     }
 
     this.reportImageStatus(`Docker image '${image}' not found locally. Pulling remotely.`);
-    let attempt = 0;
-    while (true) {
-      try {
-        await this.pullImage(image);
-        break;
-      } catch (error: unknown) {
-        const retryDelayMs = this.imagePullRetryDelaysMs[attempt];
-        if (retryDelayMs === undefined || !AppServerContainerService.isRemoteManifestUnknown(error)) {
-          throw error;
-        }
-
-        const retryDelaySeconds = Number((retryDelayMs / 1_000).toFixed(1));
-        this.reportImageStatus(
-          `Docker image '${image}' is not published remotely yet. Retrying in ${retryDelaySeconds} seconds.`,
-        );
-        attempt += 1;
-        await this.wait(retryDelayMs);
+    try {
+      await this.pullImage(image);
+    } catch (error: unknown) {
+      if (AppServerContainerService.isRemoteManifestUnknown(error)) {
+        throw AppServerContainerService.buildRemoteManifestUnknownError(image);
       }
+      throw error;
     }
     this.reportImageStatus(`Docker image '${image}' is ready.`);
   }

@@ -94,11 +94,9 @@ test("AppServerContainerService pulls missing runtime image before app-server st
   ]);
 });
 
-test("AppServerContainerService retries when the runtime image tag is not published remotely yet", async () => {
+test("AppServerContainerService fails fast when the runtime image tag is not published remotely yet", async () => {
   const reportedMessages: string[] = [];
   const pulledImages: string[] = [];
-  const waitedDelaysMs: number[] = [];
-  let pullAttempt = 0;
 
   const fakeDocker = {
     getImage(_image: string) {
@@ -110,45 +108,23 @@ test("AppServerContainerService retries when the runtime image tag is not publis
     },
     pull(image: string, callback: (error: Error | null, stream?: NodeJS.ReadableStream) => void) {
       pulledImages.push(image);
-      pullAttempt += 1;
-      if (pullAttempt < 3) {
-        callback(new Error("manifest for companyhelm/runner:0.0.11 not found: manifest unknown"));
-        return;
-      }
-      callback(null, {} as NodeJS.ReadableStream);
-    },
-    modem: {
-      followProgress(
-        _stream: NodeJS.ReadableStream,
-        onFinished: (error: Error | null) => void,
-      ) {
-        onFinished(null);
-      },
+      callback(new Error("manifest for companyhelm/runner:0.0.11 not found: manifest unknown"));
     },
   };
 
   const service = new AppServerContainerService({
     docker: fakeDocker as any,
     imageStatusReporter: (message) => reportedMessages.push(message),
-    imagePullRetryDelaysMs: [200, 400],
-    wait: async (delayMs) => {
-      waitedDelaysMs.push(delayMs);
-    },
   });
 
-  await callEnsureImageAvailable(service, "companyhelm/runner:0.0.11");
+  await assert.rejects(
+    callEnsureImageAvailable(service, "companyhelm/runner:0.0.11"),
+    /Docker image 'companyhelm\/runner:0\.0\.11' is not available remotely yet\. The Docker build\/push may still be running\./,
+  );
 
-  assert.deepEqual(pulledImages, [
-    "companyhelm/runner:0.0.11",
-    "companyhelm/runner:0.0.11",
-    "companyhelm/runner:0.0.11",
-  ]);
-  assert.deepEqual(waitedDelaysMs, [200, 400]);
+  assert.deepEqual(pulledImages, ["companyhelm/runner:0.0.11"]);
   assert.deepEqual(reportedMessages, [
     "Docker image 'companyhelm/runner:0.0.11' not found locally. Pulling remotely.",
-    "Docker image 'companyhelm/runner:0.0.11' is not published remotely yet. Retrying in 0.2 seconds.",
-    "Docker image 'companyhelm/runner:0.0.11' is not published remotely yet. Retrying in 0.4 seconds.",
-    "Docker image 'companyhelm/runner:0.0.11' is ready.",
   ]);
 });
 

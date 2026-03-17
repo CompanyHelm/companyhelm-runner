@@ -8,6 +8,7 @@ test("formatSdkModelRefreshFailure explains runtime image publish delays separat
   );
 
   assert.match(message, /runner image is not available from Docker yet/i);
+  assert.match(message, /Docker build\/push may still be running/i);
   assert.match(message, /Wait for the image publish to finish or set runtime_image to an available tag/i);
   assert.doesNotMatch(message, /valid auth/i);
 });
