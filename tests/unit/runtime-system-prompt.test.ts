@@ -18,9 +18,11 @@ test("renderRuntimeSystemPrompt includes common and shared workspace guidance", 
   assert.equal(rendered.includes("## Workspace Structure"), true);
   assert.equal(rendered.includes("## Shared Workspace"), true);
   assert.equal(rendered.includes("## Dedicated Workspace"), false);
-  assert.equal(rendered.includes("/home/agent/.companyhelm/agent/installations.json"), true);
-  assert.equal(rendered.includes("list-installations"), true);
-  assert.equal(rendered.includes("gh-use-installation"), true);
+  assert.equal(rendered.includes("## GitHub Installations"), false);
+  assert.equal(rendered.includes("/home/agent/.companyhelm/agent/installations.json"), false);
+  assert.equal(rendered.includes("list-installations"), false);
+  assert.equal(rendered.includes("gh-use-installation"), false);
+  assert.equal(rendered.includes("git push"), false);
   assert.equal(rendered.includes("http://host.docker.internal:3000/agent/v1"), true);
   assert.equal(rendered.includes("thread-secret-123"), true);
   assert.equal(rendered.includes("{{"), false);

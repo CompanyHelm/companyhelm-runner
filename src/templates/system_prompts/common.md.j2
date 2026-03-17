@@ -19,22 +19,8 @@ Docker is available, the docker host runs in a separate container. The network i
 - Nested DinD is not supported in this environment because the outer runtime already uses rootless DinD.
 - If you need Docker in Docker, mount the configured host runtime instead of trying nested DinD.
 
-## GitHub Installations
-
-- Synced GitHub installation credentials are stored at `{{home_directory}}/.companyhelm/agent/installations.json`.
-- Use `list-installations` to inspect installation IDs, repository scopes, tokens, and expiration timestamps.
-- Use `gh-use-installation <installation-id>` to configure `gh` authentication for a specific installation.
-
-```bash
-list-installations
-gh-use-installation {installation_id}
-gh auth status --hostname github.com
-```
-
 ## Available CLI Tools
 
-- `list-installations`: list synced GitHub installations with repositories, access tokens, and expirations.
-- `gh-use-installation <installation-id>`: configure `gh` authentication for a selected GitHub installation token.
 - `aws`: AWS CLI is pre-installed and available in `PATH`.
 - For scripted PR creation and updates, use `gh pr create --body-file <path>` and `gh pr edit --body-file <path>`.
 - Playwright CLI is already installed and available with Chromium pre-installed.

@@ -71,17 +71,6 @@ export interface RuntimeAgentCliConfig {
   token: string;
 }
 
-export interface RuntimeGithubInstallationsPayload {
-  synced_at: string;
-  installations: Array<{
-    installation_id: string;
-    access_token: string;
-    access_token_expires_unix_time_ms: string;
-    access_token_expiration: string;
-    repositories: string[];
-  }>;
-}
-
 export interface RuntimeThreadMetadataPayload {
   mcpServers: ThreadMcpServerConfig[];
   gitSkillPackages: ThreadGitSkillPackageConfig[];
@@ -935,24 +924,6 @@ export class ThreadContainerService {
     this.runDockerExecScript(
       ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
       contextMessage,
-    );
-  }
-
-  async ensureRuntimeContainerGithubInstallations(
-    name: string,
-    user: ThreadContainerUser,
-    payload: RuntimeGithubInstallationsPayload,
-  ): Promise<void> {
-    await this.ensureRuntimeContainerAgentMetadataFiles(
-      name,
-      user,
-      [
-        {
-          filename: "installations.json",
-          content: `${JSON.stringify(payload, null, 2)}\n`,
-        },
-      ],
-      `Failed to write runtime GitHub installations metadata in container '${name}'`,
     );
   }
 
