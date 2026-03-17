@@ -32,7 +32,7 @@
   "dependencies": {
     "@bufbuild/protobuf": "^2.11.0",
     "@clack/prompts": "^1.0.1",
-    "@companyhelm/protos": "file:../companyhelm-protos",
+    "@companyhelm/protos": "github:CompanyHelm/companyhelm-protos#fae74176b65d65d59c07bcae06a27b5cec3239a0",
     "@grpc/grpc-js": "^1.14.3",
     "@libsql/client": "^0.17.0",
     "commander": "^14.0.0",
