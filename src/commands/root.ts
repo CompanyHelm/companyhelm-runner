@@ -80,7 +80,10 @@ import { expandHome } from "../utils/path.js";
 import { containsCtrlCInterruptInput, restoreInteractiveTerminalState } from "../utils/terminal.js";
 import { DaemonStartupWatchdog } from "../utils/daemon_startup_watchdog.js";
 import { ThreadMetadataStore } from "../provisioning/host_provisioning/thread_metadata_store.js";
-import { ThreadWorkspaceProvisioner } from "../provisioning/host_provisioning/thread_workspace_provisioner.js";
+import {
+  resolveThreadWorkspaceDirectory,
+  ThreadWorkspaceProvisioner,
+} from "../provisioning/host_provisioning/thread_workspace_provisioner.js";
 import { buildCodexDeveloperInstructions } from "../provisioning/runtime_provisioning/system_prompt.js";
 import { ensureRunnerStartupPreflight } from "../preflight/entrypoints.js";
 import type { RunnerStartCommandOptions } from "./runner/common.js";
@@ -386,6 +389,24 @@ function normalizeReasoningLevels(value: unknown): string[] {
 
 export function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function formatWorkspaceStartupMessage(
+  cfg: Pick<Config, "config_directory" | "workspace_path" | "workspaces_directory" | "use_dedicated_workspaces">,
+): string {
+  if (cfg.use_dedicated_workspaces) {
+    const workspacesDirectory = resolveThreadsRootDirectory(cfg.config_directory, cfg.workspaces_directory);
+    return `Workspace modality: dedicated (workspaces dir: ${workspacesDirectory})`;
+  }
+
+  const workspaceDirectory = resolveThreadWorkspaceDirectory({
+    configDirectory: cfg.config_directory,
+    workspacesDirectory: cfg.workspaces_directory,
+    workspacePath: cfg.workspace_path,
+    useDedicatedWorkspaces: false,
+    threadId: "startup",
+  });
+  return `Workspace modality: shared (workspace: ${workspaceDirectory})`;
 }
 
 function getGrpcStatusCode(error: unknown): number | undefined {
@@ -3592,6 +3613,7 @@ export async function runRootCommand(
 ): Promise<void> {
   const logger = createLogger(options.logLevel ?? "INFO", { daemonMode: options.daemon ?? false });
   const cfg = buildRootConfig(options);
+  logger.info(formatWorkspaceStartupMessage(cfg));
   await ensureRunnerStartupPreflight(cfg);
   await ensureCodexRunnerStartState(cfg, {
     useDedicatedAuth: options.useDedicatedAuth,

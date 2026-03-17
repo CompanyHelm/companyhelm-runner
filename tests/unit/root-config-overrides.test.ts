@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   buildRootConfig,
+  formatWorkspaceStartupMessage,
   formatApiConnectionFailureDiagnostics,
   formatApiConnectionFailureMessage,
   isRetryableApiConnectionError,
@@ -50,6 +51,30 @@ test("buildRootConfig rejects combining workspacePath with dedicated workspaces"
         useDedicatedWorkspaces: true,
       }),
     /cannot be used together/i,
+  );
+});
+
+test("formatWorkspaceStartupMessage reports shared workspace path", () => {
+  const cfg = buildRootConfig({
+    workspacePath: "/tmp/companyhelm-shared-workspace",
+    useDedicatedWorkspaces: false,
+  });
+
+  assert.equal(
+    formatWorkspaceStartupMessage(cfg),
+    "Workspace modality: shared (workspace: /tmp/companyhelm-shared-workspace)",
+  );
+});
+
+test("formatWorkspaceStartupMessage reports resolved dedicated workspaces dir", () => {
+  const cfg = buildRootConfig({
+    configPath: "/tmp/companyhelm-config",
+    useDedicatedWorkspaces: true,
+  });
+
+  assert.equal(
+    formatWorkspaceStartupMessage(cfg),
+    "Workspace modality: dedicated (workspaces dir: /tmp/companyhelm-config/workspaces)",
   );
 });
 
