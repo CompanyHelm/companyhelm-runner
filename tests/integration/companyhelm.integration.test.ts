@@ -1691,9 +1691,6 @@ test("companyhelm root command keeps runner metadata out of the workspace and av
   const ensureRuntimeContainerCodexConfigSpy = vi
     .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
     .mockImplementation(async () => undefined);
-  const ensureRuntimeContainerAgentCliConfigSpy = vi
-    .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
-    .mockImplementation(async () => undefined);
   const ensureRuntimeContainerThreadGitSkillsSpy = vi
     .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadGitSkills")
     .mockImplementation(async () => undefined);
@@ -1843,7 +1840,6 @@ test("companyhelm root command keeps runner metadata out of the workspace and av
     ensureRuntimeContainerToolingSpy.mockRestore();
     ensureRuntimeContainerBashrcSpy.mockRestore();
     ensureRuntimeContainerCodexConfigSpy.mockRestore();
-    ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
     ensureRuntimeContainerThreadGitSkillsSpy.mockRestore();
     appServerStartSpy.mockRestore();
     startThreadWithResponseSpy.mockRestore();
@@ -1892,9 +1888,6 @@ test("companyhelm root command echoes app-server thread/start response id on thr
     .mockImplementation(async () => undefined);
   const ensureRuntimeContainerCodexConfigSpy = vi
     .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
-    .mockImplementation(async () => undefined);
-  const ensureRuntimeContainerAgentCliConfigSpy = vi
-    .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
     .mockImplementation(async () => undefined);
   const ensureRuntimeContainerThreadGitSkillsSpy = vi
     .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadGitSkills")
@@ -1990,7 +1983,6 @@ test("companyhelm root command echoes app-server thread/start response id on thr
     ensureRuntimeContainerToolingSpy.mockRestore();
     ensureRuntimeContainerBashrcSpy.mockRestore();
     ensureRuntimeContainerCodexConfigSpy.mockRestore();
-    ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
     ensureRuntimeContainerThreadGitSkillsSpy.mockRestore();
     appServerStartSpy.mockRestore();
     startThreadWithResponseSpy.mockRestore();
@@ -2046,9 +2038,6 @@ test("companyhelm root command handles full lifecycle: create thread and delete 
     .mockImplementation(async () => undefined);
   const ensureRuntimeContainerCodexConfigSpy = vi
     .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
-    .mockImplementation(async () => undefined);
-  const ensureRuntimeContainerAgentCliConfigSpy = vi
-    .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
     .mockImplementation(async () => undefined);
   const ensureRuntimeContainerThreadGitSkillsSpy = vi
     .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadGitSkills")
@@ -2257,7 +2246,6 @@ test("companyhelm root command handles full lifecycle: create thread and delete 
     ensureRuntimeContainerToolingSpy.mockRestore();
     ensureRuntimeContainerBashrcSpy.mockRestore();
     ensureRuntimeContainerCodexConfigSpy.mockRestore();
-    ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
     ensureRuntimeContainerThreadGitSkillsSpy.mockRestore();
     appServerStartSpy.mockRestore();
     startThreadWithResponseSpy.mockRestore();
@@ -2317,9 +2305,6 @@ test(
       .mockImplementation(async () => undefined);
     const ensureRuntimeContainerCodexConfigSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
-      .mockImplementation(async () => undefined);
-    const ensureRuntimeContainerAgentCliConfigSpy = vi
-      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
       .mockImplementation(async () => undefined);
     const ensureRuntimeContainerThreadGitSkillsSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadGitSkills")
@@ -2610,14 +2595,6 @@ test(
         1,
         "expected Codex config.toml write only before first app-server startup",
       );
-      assert.equal(
-        ensureRuntimeContainerAgentCliConfigSpy.mock.calls.length,
-        3,
-        "expected agent runtime config writes during create-thread bootstrap and each user message when thread secret exists",
-      );
-      const firstAgentCliConfig = ensureRuntimeContainerAgentCliConfigSpy.mock.calls[0]?.[2];
-      assert.equal(firstAgentCliConfig?.agent_api_url, "https://api.companyhelm.com/agent/v1");
-      assert.equal(firstAgentCliConfig?.token, "thread-secret-user-message");
       const codexConfigToml = String(ensureRuntimeContainerCodexConfigSpy.mock.calls[0]?.[2] ?? "");
       assert.equal(codexConfigToml.includes("[mcp_servers.\"context7\"]"), true, "expected context7 MCP table in config");
       assert.equal(codexConfigToml.includes("url = \"https://mcp.context7.com/mcp\""), true, "expected context7 MCP URL in config");
@@ -2652,7 +2629,6 @@ test(
       ensureRuntimeContainerToolingSpy.mockRestore();
       ensureRuntimeContainerBashrcSpy.mockRestore();
       ensureRuntimeContainerCodexConfigSpy.mockRestore();
-      ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
       ensureRuntimeContainerThreadGitSkillsSpy.mockRestore();
       stopContainerSpy.mockRestore();
       appServerStartSpy.mockRestore();
@@ -2720,9 +2696,6 @@ test(
       .mockImplementation(async () => undefined);
     const ensureRuntimeContainerCodexConfigSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
-      .mockImplementation(async () => undefined);
-    const ensureRuntimeContainerAgentCliConfigSpy = vi
-      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
       .mockImplementation(async () => undefined);
     const ensureRuntimeContainerThreadGitSkillsSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadGitSkills")
@@ -2924,7 +2897,6 @@ test(
       ensureRuntimeContainerToolingSpy.mockRestore();
       ensureRuntimeContainerBashrcSpy.mockRestore();
       ensureRuntimeContainerCodexConfigSpy.mockRestore();
-      ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
       ensureRuntimeContainerThreadGitSkillsSpy.mockRestore();
       stopContainerSpy.mockRestore();
       appServerStartSpy.mockRestore();
@@ -2986,9 +2958,6 @@ test(
       .mockImplementation(async () => undefined);
     const ensureRuntimeContainerCodexConfigSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
-      .mockImplementation(async () => undefined);
-    const ensureRuntimeContainerAgentCliConfigSpy = vi
-      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
       .mockImplementation(async () => undefined);
     const ensureRuntimeContainerThreadGitSkillsSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadGitSkills")
@@ -3095,7 +3064,6 @@ test(
       ensureRuntimeContainerToolingSpy.mockRestore();
       ensureRuntimeContainerBashrcSpy.mockRestore();
       ensureRuntimeContainerCodexConfigSpy.mockRestore();
-      ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
       ensureRuntimeContainerThreadGitSkillsSpy.mockRestore();
       isContainerRunningSpy.mockRestore();
       stopContainerSpy.mockRestore();
@@ -3156,9 +3124,6 @@ test(
       .mockImplementation(async () => undefined);
     const ensureRuntimeContainerCodexConfigSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
-      .mockImplementation(async () => undefined);
-    const ensureRuntimeContainerAgentCliConfigSpy = vi
-      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
       .mockImplementation(async () => undefined);
     const ensureRuntimeContainerThreadGitSkillsSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadGitSkills")
@@ -3272,7 +3237,6 @@ test(
       ensureRuntimeContainerToolingSpy.mockRestore();
       ensureRuntimeContainerBashrcSpy.mockRestore();
       ensureRuntimeContainerCodexConfigSpy.mockRestore();
-      ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
       ensureRuntimeContainerThreadGitSkillsSpy.mockRestore();
       isContainerRunningSpy.mockRestore();
       stopContainerSpy.mockRestore();
@@ -3332,9 +3296,6 @@ test(
       .mockImplementation(async () => undefined);
     const ensureRuntimeContainerCodexConfigSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerCodexConfig")
-      .mockImplementation(async () => undefined);
-    const ensureRuntimeContainerAgentCliConfigSpy = vi
-      .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerAgentCliConfig")
       .mockImplementation(async () => undefined);
     const isContainerRunningSpy = vi
       .spyOn(threadLifecycle.ThreadContainerService.prototype, "isContainerRunning")
@@ -3539,11 +3500,6 @@ test(
         1,
         "expected Codex config.toml write only before first app-server startup",
       );
-      assert.equal(
-        ensureRuntimeContainerAgentCliConfigSpy.mock.calls.length,
-        0,
-        "expected no companyhelm-agent config writes when thread secret is missing",
-      );
       assert.equal(stopContainerSpy.mock.calls.length, 2, "expected runtime+dind stop on daemon shutdown");
     } finally {
       reconnectDelaySpy.mockRestore();
@@ -3554,7 +3510,6 @@ test(
       ensureRuntimeContainerToolingSpy.mockRestore();
       ensureRuntimeContainerBashrcSpy.mockRestore();
       ensureRuntimeContainerCodexConfigSpy.mockRestore();
-      ensureRuntimeContainerAgentCliConfigSpy.mockRestore();
       isContainerRunningSpy.mockRestore();
       stopContainerSpy.mockRestore();
       appServerStartSpy.mockRestore();

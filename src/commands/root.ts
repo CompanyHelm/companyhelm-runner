@@ -55,7 +55,6 @@ import {
   resolveThreadDirectory,
   resolveThreadsRootDirectory,
   ThreadContainerService,
-  type RuntimeAgentCliConfig,
   type ThreadAuthMode,
   type ThreadGitSkillConfig,
   type ThreadGitSkillPackageConfig,
@@ -101,7 +100,6 @@ const TURN_COMPLETION_TIMEOUT_MS = 2 * 60 * 60_000;
 const WORKSPACE_INSTALLATIONS_DIRECTORY = ".companyhelm";
 const THREAD_GIT_SKILLS_CONFIG_FILENAME = "thread-git-skills.json";
 const THREAD_MCP_CONFIG_FILENAME = "thread-mcp.json";
-const THREAD_AGENT_CLI_CONFIG_FILENAME = "thread-agent-cli.json";
 const THREAD_MCP_BEARER_TOKEN_ENV_PREFIX = "COMPANYHELM_MCP_TOKEN_";
 const THREAD_MCP_AUTH_TYPE_BEARER_TOKEN = 2;
 const THREAD_MCP_STARTUP_TIMEOUT_SECONDS = 60;
@@ -1112,83 +1110,6 @@ function readWorkspaceThreadMcpConfig(workspaceDirectory: string, logger: Logger
   }
 }
 
-function resolveThreadAgentCliConfigPath(workspaceDirectory: string): string {
-  return join(workspaceDirectory, WORKSPACE_INSTALLATIONS_DIRECTORY, THREAD_AGENT_CLI_CONFIG_FILENAME);
-}
-
-function parseThreadAgentCliConfig(content: unknown): RuntimeAgentCliConfig | null {
-  if (!isRecord(content)) {
-    return null;
-  }
-
-  const agentApiUrl = normalizeNonEmptyString(content.agent_api_url);
-  const token = normalizeNonEmptyString(content.token);
-  if (!agentApiUrl || !token) {
-    return null;
-  }
-
-  return {
-    agent_api_url: agentApiUrl,
-    token,
-  };
-}
-
-function writeWorkspaceThreadAgentCliConfig(
-  workspaceDirectory: string,
-  cliSecret: string,
-  agentApiUrl: string,
-  logger: Logger,
-): void {
-  const configPath = resolveThreadAgentCliConfigPath(workspaceDirectory);
-  const configDirectory = join(workspaceDirectory, WORKSPACE_INSTALLATIONS_DIRECTORY);
-  const temporaryPath = `${configPath}.tmp`;
-
-  try {
-    mkdirSync(configDirectory, { recursive: true });
-    if (cliSecret.length === 0) {
-      rmSync(configPath, { force: true });
-      rmSync(temporaryPath, { force: true });
-      return;
-    }
-
-    const payload: RuntimeAgentCliConfig = {
-      agent_api_url: normalizeThreadAgentApiUrlForRuntime(agentApiUrl),
-      token: cliSecret,
-    };
-    writeFileSync(
-      temporaryPath,
-      `${JSON.stringify(payload, null, 2)}\n`,
-      "utf8",
-    );
-    renameSync(temporaryPath, configPath);
-  } catch (error: unknown) {
-    logger.warn(`Failed writing thread agent CLI config for workspace '${workspaceDirectory}': ${toErrorMessage(error)}`);
-  }
-}
-
-function readWorkspaceThreadAgentCliConfig(
-  workspaceDirectory: string,
-  logger: Logger,
-): RuntimeAgentCliConfig | null {
-  const configPath = resolveThreadAgentCliConfigPath(workspaceDirectory);
-  try {
-    const rawContent = readFileSync(configPath, "utf8");
-    const parsedContent = JSON.parse(rawContent) as unknown;
-    const parsedConfig = parseThreadAgentCliConfig(parsedContent);
-    if (!parsedConfig) {
-      logger.warn(`Thread agent CLI config has invalid shape at '${configPath}'.`);
-      return null;
-    }
-    return parsedConfig;
-  } catch (error: unknown) {
-    if (error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "ENOENT") {
-      return null;
-    }
-    logger.warn(`Failed reading thread agent CLI config at '${configPath}': ${toErrorMessage(error)}`);
-    return null;
-  }
-}
-
 function escapeTomlString(value: string): string {
   return JSON.stringify(value);
 }
@@ -1450,7 +1371,6 @@ async function reconcileThreadRunningStateBeforeUserMessage(
   const persistedThreadMcpServers = metadataStore.readThreadMcpConfig(threadState.id);
   const persistedThreadGitSkillPackages = metadataStore.readThreadGitSkillsConfig(threadState.id);
   const threadMcpSetup = buildThreadCodexMcpSetup(persistedThreadMcpServers);
-  const threadAgentCliConfig = buildThreadAgentCliConfig(threadState.cliSecret, cfg.agent_api_url);
   const appServerSession = await getOrCreateThreadAppServerSession(
     threadState.id,
     threadState.runtimeContainer,
@@ -1475,16 +1395,8 @@ async function reconcileThreadRunningStateBeforeUserMessage(
     {
       mcpServers: persistedThreadMcpServers,
       gitSkillPackages: persistedThreadGitSkillPackages,
-      threadAgentCliConfig,
     },
   );
-  if (threadAgentCliConfig) {
-    await containerService.ensureRuntimeContainerAgentCliConfig(
-      threadState.runtimeContainer,
-      runtimeUser,
-      threadAgentCliConfig,
-    );
-  }
   if (!appServerSession.started) {
     await containerService.ensureRuntimeContainerCodexConfig(
       threadState.runtimeContainer,
@@ -1567,21 +1479,6 @@ function normalizeAdditionalModelInstructions(value: string | null | undefined):
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function buildThreadAgentCliConfig(
-  cliSecret: string | null | undefined,
-  agentApiUrl: string,
-): RuntimeAgentCliConfig | null {
-  const normalizedSecret = normalizeNonEmptyString(cliSecret);
-  if (!normalizedSecret) {
-    return null;
-  }
-
-  return {
-    agent_api_url: normalizeThreadAgentApiUrlForRuntime(agentApiUrl),
-    token: normalizedSecret,
-  };
 }
 
 function buildThreadDeveloperInstructions(
@@ -2315,7 +2212,6 @@ async function handleCreateThreadRequest(
     const persistedThreadMcpServers = metadataStore.readThreadMcpConfig(threadState.id);
     const persistedThreadGitSkillPackages = metadataStore.readThreadGitSkillsConfig(threadState.id);
     const threadMcpSetup = buildThreadCodexMcpSetup(persistedThreadMcpServers);
-    const threadAgentCliConfig = buildThreadAgentCliConfig(threadState.cliSecret, cfg.agent_api_url);
     const appServerSession = await getOrCreateThreadAppServerSession(
       threadId,
       threadState.runtimeContainer,
@@ -2345,16 +2241,8 @@ async function handleCreateThreadRequest(
       {
         mcpServers: persistedThreadMcpServers,
         gitSkillPackages: persistedThreadGitSkillPackages,
-        threadAgentCliConfig,
       },
     );
-    if (threadAgentCliConfig) {
-      await containerService.ensureRuntimeContainerAgentCliConfig(
-        threadState.runtimeContainer,
-        runtimeUser,
-        threadAgentCliConfig,
-      );
-    }
     if (!appServerSession.started) {
       await containerService.ensureRuntimeContainerCodexConfig(
         threadState.runtimeContainer,
@@ -2802,7 +2690,6 @@ async function executeCreateUserMessageRequest(
   const persistedThreadMcpServers = metadataStore.readThreadMcpConfig(threadState.id);
   const persistedThreadGitSkillPackages = metadataStore.readThreadGitSkillsConfig(threadState.id);
   const threadMcpSetup = buildThreadCodexMcpSetup(persistedThreadMcpServers);
-  const threadAgentCliConfig = buildThreadAgentCliConfig(threadState.cliSecret, cfg.agent_api_url);
   const appServerSession = await getOrCreateThreadAppServerSession(
     request.threadId,
     threadState.runtimeContainer,
@@ -2837,16 +2724,8 @@ async function executeCreateUserMessageRequest(
       {
         mcpServers: persistedThreadMcpServers,
         gitSkillPackages: persistedThreadGitSkillPackages,
-        threadAgentCliConfig,
       },
     );
-    if (threadAgentCliConfig) {
-      await containerService.ensureRuntimeContainerAgentCliConfig(
-        threadState.runtimeContainer,
-        runtimeUser,
-        threadAgentCliConfig,
-      );
-    }
     if (!appServerSession.started) {
       await containerService.ensureRuntimeContainerCodexConfig(
         threadState.runtimeContainer,

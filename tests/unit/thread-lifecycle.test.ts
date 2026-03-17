@@ -738,49 +738,6 @@ test("ThreadContainerService writes thread-scoped Codex config.toml into runtime
   assert.match(invocation.args[6], /mcp_servers\.context7/);
 });
 
-test("ThreadContainerService writes agent runtime config into runtime home", async () => {
-  let invocation: { command: string; args: string[]; options: Record<string, unknown> } | null = null;
-  const runCommand = (command: string, args: readonly string[], options: Record<string, unknown>) => {
-    invocation = { command, args: [...args], options };
-    return {
-      pid: 1,
-      output: [null, "", ""],
-      stdout: "",
-      stderr: "",
-      status: 0,
-      signal: null,
-    } as any;
-  };
-
-  const service = new ThreadContainerService({} as any, runCommand as any);
-  await service.ensureRuntimeContainerAgentCliConfig(
-    "companyhelm-runtime-thread-agent-cli",
-    {
-      uid: 501,
-      gid: 20,
-      agentUser: "agent",
-      agentHomeDirectory: "/home/agent",
-    },
-    {
-      agent_api_url: "host.docker.internal:50052/agent/v1",
-      token: "thread-secret-123",
-    },
-  );
-
-  assert.ok(invocation);
-  assert.equal(invocation.command, "docker");
-  assert.deepEqual(
-    invocation.args.slice(0, 6),
-    ["exec", "-u", "agent", "companyhelm-runtime-thread-agent-cli", "bash", "-lc"],
-  );
-  assert.equal(invocation.options.encoding, "utf8");
-  assert.match(invocation.args[6], /CONFIG_PATH='\/home\/agent\/\.config\/companyhelm-agent-cli\/config\.json'/);
-  assert.match(invocation.args[6], /printf '%s' "\$CONFIG_CONTENT" > "\$CONFIG_PATH"/);
-  assert.match(invocation.args[6], /chmod 0600 "\$CONFIG_PATH"/);
-  assert.match(invocation.args[6], /"agent_api_url": "host\.docker\.internal:50052\/agent\/v1"/);
-  assert.match(invocation.args[6], /"token": "thread-secret-123"/);
-});
-
 test("ThreadContainerService validates playwright chromium availability in runtime tooling bootstrap", async () => {
   let invocation: { command: string; args: string[]; options: Record<string, unknown> } | null = null;
   const runCommand = (command: string, args: readonly string[], options: Record<string, unknown>) => {
@@ -990,37 +947,6 @@ test("ThreadContainerService surfaces runtime Codex config write failures", asyn
         "[mcp_servers.context7]\nurl = \"https://mcp.context7.com/mcp\"\n",
       ),
     /Failed to write runtime Codex config\.toml in container 'companyhelm-runtime-thread-codex-config-error' \(exit 11\): write failed/,
-  );
-});
-
-test("ThreadContainerService surfaces runtime agent config write failures", async () => {
-  const runCommand = () =>
-    ({
-      pid: 1,
-      output: [null, "", "write failed"],
-      stdout: "",
-      stderr: "write failed",
-      status: 12,
-      signal: null,
-    }) as any;
-  const service = new ThreadContainerService({} as any, runCommand as any);
-
-  await assert.rejects(
-    () =>
-      service.ensureRuntimeContainerAgentCliConfig(
-        "companyhelm-runtime-thread-agent-cli-error",
-        {
-          uid: 501,
-          gid: 20,
-          agentUser: "agent",
-          agentHomeDirectory: "/home/agent",
-        },
-        {
-          agent_api_url: "host.docker.internal:50052/agent/v1",
-          token: "thread-secret",
-        },
-      ),
-    /Failed to write runtime agent config in container 'companyhelm-runtime-thread-agent-cli-error' \(exit 12\): write failed/,
   );
 });
 

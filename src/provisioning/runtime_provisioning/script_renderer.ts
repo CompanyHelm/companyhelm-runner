@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import type {
-  RuntimeAgentCliConfig,
   ThreadContainerUser,
   ThreadGitSkillProvisionOptions,
 } from "../../service/thread_lifecycle.js";
@@ -52,18 +51,6 @@ export class RuntimeProvisioningScriptRenderer {
     return this.templateRenderer.render("provisioning/runtime_codex_config.sh.j2", {
       agent_home: shellQuote(user.agentHomeDirectory),
       config_content: shellQuote(configToml),
-    });
-  }
-
-  renderAgentCliConfigScript(user: ThreadContainerUser, config: RuntimeAgentCliConfig): string {
-    const configDirectory = join(user.agentHomeDirectory, ".config", "companyhelm-agent-cli");
-    const configPath = join(configDirectory, "config.json");
-    const configContent = `${JSON.stringify(config, null, 2)}\n`;
-
-    return this.templateRenderer.render("provisioning/runtime_agent_cli_config.sh.j2", {
-      config_dir: shellQuote(configDirectory),
-      config_path: shellQuote(configPath),
-      config_content: shellQuote(configContent),
     });
   }
 

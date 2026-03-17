@@ -1,8 +1,0 @@
-set -euo pipefail
-CONFIG_DIR={{config_dir}}
-CONFIG_PATH={{config_path}}
-CONFIG_CONTENT={{config_content}}
-
-install -d -m 0755 "$CONFIG_DIR"
-printf '%s' "$CONFIG_CONTENT" > "$CONFIG_PATH"
-chmod 0600 "$CONFIG_PATH"

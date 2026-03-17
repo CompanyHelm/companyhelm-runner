@@ -66,15 +66,9 @@ export interface ThreadGitSkillProvisionOptions {
   packages: ThreadGitSkillPackageConfig[];
 }
 
-export interface RuntimeAgentCliConfig {
-  agent_api_url: string;
-  token: string;
-}
-
 export interface RuntimeThreadMetadataPayload {
   mcpServers: ThreadMcpServerConfig[];
   gitSkillPackages: ThreadGitSkillPackageConfig[];
-  threadAgentCliConfig: RuntimeAgentCliConfig | null;
 }
 
 const CONTAINER_START_TIMEOUT_MS = 30_000;
@@ -455,25 +449,6 @@ function buildRuntimeThreadGitSkillsLinkScript(
   }
 
   return scriptLines.join("\n");
-}
-
-function buildRuntimeAgentCliConfigScript(
-  user: ThreadContainerUser,
-  config: RuntimeAgentCliConfig,
-): string {
-  const configDirectory = join(user.agentHomeDirectory, ".config", "companyhelm-agent-cli");
-  const configPath = join(configDirectory, "config.json");
-  const configContent = `${JSON.stringify(config, null, 2)}\n`;
-  return [
-    "set -euo pipefail",
-    `CONFIG_DIR=${shellQuote(configDirectory)}`,
-    `CONFIG_PATH=${shellQuote(configPath)}`,
-    `CONFIG_CONTENT=${shellQuote(configContent)}`,
-    "",
-    'install -d -m 0755 "$CONFIG_DIR"',
-    'printf \'%s\' "$CONFIG_CONTENT" > "$CONFIG_PATH"',
-    'chmod 0600 "$CONFIG_PATH"',
-  ].join("\n");
 }
 
 export function buildDindContainerOptions(options: ThreadContainerCreateOptions): ContainerCreateOptions {
@@ -863,18 +838,6 @@ export class ThreadContainerService {
     );
   }
 
-  async ensureRuntimeContainerAgentCliConfig(
-    name: string,
-    user: ThreadContainerUser,
-    config: RuntimeAgentCliConfig,
-  ): Promise<void> {
-    const script = this.scriptRenderer.renderAgentCliConfigScript(user, config);
-    this.runDockerExecScript(
-      ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
-      `Failed to write runtime agent config in container '${name}'`,
-    );
-  }
-
   async ensureRuntimeContainerGitConfig(
     name: string,
     user: ThreadContainerUser,
@@ -942,13 +905,6 @@ export class ThreadContainerService {
         content: `${JSON.stringify({ packages: payload.gitSkillPackages }, null, 2)}\n`,
       },
     ];
-    if (payload.threadAgentCliConfig) {
-      files.push({
-        filename: "thread-agent-cli.json",
-        content: `${JSON.stringify(payload.threadAgentCliConfig, null, 2)}\n`,
-      });
-    }
-
     await this.ensureRuntimeContainerAgentMetadataFiles(
       name,
       user,
