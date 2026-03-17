@@ -509,6 +509,22 @@ interface ResolvedThreadNameUpdate {
   threadName?: string;
 }
 
+interface ResolvedTokenUsageBreakdown {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+}
+
+interface ResolvedThreadTokenUsageUpdate {
+  sdkThreadId: string;
+  sdkTurnId: string;
+  totalUsage: ResolvedTokenUsageBreakdown;
+  lastUsage: ResolvedTokenUsageBreakdown;
+  modelContextWindow: number | null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -519,6 +535,42 @@ function normalizeNonEmptyString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeNonNegativeNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function resolveTokenUsageBreakdown(value: unknown): ResolvedTokenUsageBreakdown | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const inputTokens = normalizeNonNegativeNumber(value.inputTokens ?? value.input_tokens);
+  const cachedInputTokens = normalizeNonNegativeNumber(value.cachedInputTokens ?? value.cached_input_tokens);
+  const outputTokens = normalizeNonNegativeNumber(value.outputTokens ?? value.output_tokens);
+  const reasoningOutputTokens = normalizeNonNegativeNumber(value.reasoningOutputTokens ?? value.reasoning_output_tokens);
+  const totalTokens = normalizeNonNegativeNumber(value.totalTokens ?? value.total_tokens);
+  if (
+    inputTokens === undefined ||
+    cachedInputTokens === undefined ||
+    outputTokens === undefined ||
+    reasoningOutputTokens === undefined ||
+    totalTokens === undefined
+  ) {
+    return null;
+  }
+
+  return {
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
 }
 
 function rewriteLocalTargetForDockerRuntime(target: string): string {
@@ -628,6 +680,40 @@ export function extractThreadNameUpdateFromNotification(
     normalizeNonEmptyString(params.thread_name);
 
   return { sdkThreadId, threadName };
+}
+
+export function extractThreadTokenUsageUpdateFromNotification(
+  notification: ServerNotification,
+): ResolvedThreadTokenUsageUpdate | null {
+  if (notification.method !== "thread/tokenUsage/updated") {
+    return null;
+  }
+
+  const rawParams = notification.params as unknown as Record<string, unknown>;
+  const sdkThreadId =
+    normalizeNonEmptyString(rawParams.threadId) ??
+    normalizeNonEmptyString(rawParams.thread_id);
+  const sdkTurnId =
+    normalizeNonEmptyString(rawParams.turnId) ??
+    normalizeNonEmptyString(rawParams.turn_id);
+  const tokenUsage = isRecord(rawParams.tokenUsage) ? rawParams.tokenUsage : rawParams.token_usage;
+  if (!sdkThreadId || !sdkTurnId || !isRecord(tokenUsage)) {
+    return null;
+  }
+
+  const totalUsage = resolveTokenUsageBreakdown(tokenUsage.total);
+  const lastUsage = resolveTokenUsageBreakdown(tokenUsage.last);
+  if (!totalUsage || !lastUsage) {
+    return null;
+  }
+
+  return {
+    sdkThreadId,
+    sdkTurnId,
+    totalUsage,
+    lastUsage,
+    modelContextWindow: normalizeNonNegativeNumber(tokenUsage.modelContextWindow ?? tokenUsage.model_context_window) ?? null,
+  };
 }
 
 function isGrpcServiceError(error: unknown): error is grpc.ServiceError {
@@ -2041,6 +2127,38 @@ async function sendThreadNameUpdate(
   await commandChannel.send(message);
 }
 
+function toProtoTokenUsageBreakdown(usage: ResolvedTokenUsageBreakdown) {
+  return {
+    inputTokens: BigInt(usage.inputTokens),
+    cachedInputTokens: BigInt(usage.cachedInputTokens),
+    outputTokens: BigInt(usage.outputTokens),
+    reasoningOutputTokens: BigInt(usage.reasoningOutputTokens),
+    totalTokens: BigInt(usage.totalTokens),
+  };
+}
+
+async function sendThreadTokenUsageUpdate(
+  commandChannel: ClientMessageSink,
+  threadId: string,
+  tokenUsageUpdate: ResolvedThreadTokenUsageUpdate,
+): Promise<void> {
+  const message = create(ClientMessageSchema, {
+    payload: {
+      case: "threadTokenUsageUpdate",
+      value: {
+        threadId,
+        sdkTurnId: tokenUsageUpdate.sdkTurnId,
+        totalUsage: toProtoTokenUsageBreakdown(tokenUsageUpdate.totalUsage),
+        lastUsage: toProtoTokenUsageBreakdown(tokenUsageUpdate.lastUsage),
+        modelContextWindow: tokenUsageUpdate.modelContextWindow === null
+          ? undefined
+          : BigInt(tokenUsageUpdate.modelContextWindow),
+      },
+    },
+  }) as ClientMessage;
+  await commandChannel.send(message);
+}
+
 async function sendTurnExecutionUpdate(
   commandChannel: ClientMessageSink,
   threadId: string,
@@ -2832,6 +2950,15 @@ async function waitForThreadTurnCompletion(
         if (threadNameUpdate && threadNameUpdate.sdkThreadId === sdkThreadId) {
           receivedThreadNameUpdate = true;
           await sendThreadNameUpdate(commandChannel, threadId, threadNameUpdate.threadName);
+        }
+
+        const tokenUsageUpdate = extractThreadTokenUsageUpdateFromNotification(notification);
+        if (
+          tokenUsageUpdate &&
+          tokenUsageUpdate.sdkThreadId === sdkThreadId &&
+          tokenUsageUpdate.sdkTurnId === sdkTurnId
+        ) {
+          await sendThreadTokenUsageUpdate(commandChannel, threadId, tokenUsageUpdate);
         }
 
         if (
