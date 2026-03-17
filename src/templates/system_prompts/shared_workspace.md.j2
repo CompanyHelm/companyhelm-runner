@@ -3,3 +3,4 @@
 - This runtime is using a shared host workspace mounted directly at `/workspace`.
 - Changes made in `/workspace` may be visible to multiple threads that use the same runner workspace path.
 - Do not assume `/workspace` is isolated per thread.
+- you need to use git worktrees to isolate your working directory from the shared workspace.
