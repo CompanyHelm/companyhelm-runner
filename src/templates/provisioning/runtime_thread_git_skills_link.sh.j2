@@ -1,0 +1,7 @@
+set -euo pipefail
+SKILLS_ROOT={{skills_root}}
+CODEX_SKILLS_ROOT={{codex_skills_root}}
+
+install -d -m 0755 "$CODEX_SKILLS_ROOT"
+
+{{skill_blocks}}

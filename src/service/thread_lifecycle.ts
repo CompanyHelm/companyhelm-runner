@@ -2,6 +2,11 @@ import Dockerode, { type ContainerCreateOptions, type MountSettings } from "dock
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import type { ThreadMcpServerConfig } from "../provisioning/host_provisioning/thread_metadata_types.js";
+import {
+  RuntimeProvisioningScriptRenderer,
+  type RuntimeAgentMetadataFile,
+} from "../provisioning/runtime_provisioning/script_renderer.js";
 import { expandHome } from "../utils/path.js";
 import { renderRuntimeBashrc } from "./runtime_bashrc.js";
 import { buildNvmCodexBootstrapScript } from "./runtime_shell.js";
@@ -64,6 +69,23 @@ export interface ThreadGitSkillProvisionOptions {
 export interface RuntimeAgentCliConfig {
   agent_api_url: string;
   token: string;
+}
+
+export interface RuntimeGithubInstallationsPayload {
+  synced_at: string;
+  installations: Array<{
+    installation_id: string;
+    access_token: string;
+    access_token_expires_unix_time_ms: string;
+    access_token_expiration: string;
+    repositories: string[];
+  }>;
+}
+
+export interface RuntimeThreadMetadataPayload {
+  mcpServers: ThreadMcpServerConfig[];
+  gitSkillPackages: ThreadGitSkillPackageConfig[];
+  threadAgentCliConfig: RuntimeAgentCliConfig | null;
 }
 
 const CONTAINER_START_TIMEOUT_MS = 30_000;
@@ -595,10 +617,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class ThreadContainerService {
   private readonly docker: Dockerode;
   private readonly runCommand: typeof spawnSync;
+  private readonly scriptRenderer: RuntimeProvisioningScriptRenderer;
 
   constructor(docker?: Dockerode, runCommand: typeof spawnSync = spawnSync) {
     this.docker = docker ?? new Dockerode();
     this.runCommand = runCommand;
+    this.scriptRenderer = new RuntimeProvisioningScriptRenderer();
   }
 
   private runDockerExecScript(args: string[], contextMessage: string): void {
@@ -815,7 +839,7 @@ export class ThreadContainerService {
   }
 
   async ensureRuntimeContainerIdentity(name: string, user: ThreadContainerUser): Promise<void> {
-    const script = buildRuntimeIdentityProvisionScript(user);
+    const script = this.scriptRenderer.renderIdentityScript(user);
     this.runDockerExecScript(
       ["exec", "-u", "0", name, "bash", "-lc", script],
       `Failed to provision runtime user '${user.agentUser}' in container '${name}'`,
@@ -823,7 +847,7 @@ export class ThreadContainerService {
   }
 
   async ensureRuntimeContainerTooling(name: string, user: ThreadContainerUser): Promise<void> {
-    const script = buildRuntimeToolingValidationScript(user);
+    const script = this.scriptRenderer.renderToolingValidationScript(user);
     this.runDockerExecScript(
       ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
       `Failed to validate runtime tooling (nvm/codex/aws/playwright) in container '${name}'`,
@@ -831,7 +855,7 @@ export class ThreadContainerService {
   }
 
   async ensureRuntimeContainerBashrc(name: string, user: ThreadContainerUser): Promise<void> {
-    const script = buildRuntimeBashrcProvisionScript(user);
+    const script = this.scriptRenderer.renderBashrcScript(user);
     this.runDockerExecScript(
       ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
       `Failed to provision runtime .bashrc in container '${name}'`,
@@ -843,15 +867,7 @@ export class ThreadContainerService {
     user: ThreadContainerUser,
     configToml: string,
   ): Promise<void> {
-    const script = [
-      "set -euo pipefail",
-      `AGENT_HOME=${shellQuote(user.agentHomeDirectory)}`,
-      `CONFIG_CONTENT=${shellQuote(configToml)}`,
-      "",
-      'install -d -m 0755 "$AGENT_HOME/.codex"',
-      'printf \'%s\' "$CONFIG_CONTENT" > "$AGENT_HOME/.codex/config.toml"',
-      'chmod 0644 "$AGENT_HOME/.codex/config.toml"',
-    ].join("\n");
+    const script = this.scriptRenderer.renderCodexConfigScript(user, configToml);
     this.runDockerExecScript(
       ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
       `Failed to write runtime Codex config.toml in container '${name}'`,
@@ -863,7 +879,7 @@ export class ThreadContainerService {
     user: ThreadContainerUser,
     config: RuntimeAgentCliConfig,
   ): Promise<void> {
-    const script = buildRuntimeAgentCliConfigScript(user, config);
+    const script = this.scriptRenderer.renderAgentCliConfigScript(user, config);
     this.runDockerExecScript(
       ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
       `Failed to write runtime agent config in container '${name}'`,
@@ -876,7 +892,7 @@ export class ThreadContainerService {
     gitUserName: string,
     gitUserEmail: string,
   ): Promise<void> {
-    const script = buildRuntimeGitConfigScript(gitUserName, gitUserEmail);
+    const script = this.scriptRenderer.renderGitConfigScript(gitUserName, gitUserEmail);
     this.runDockerExecScript(
       ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
       `Failed to configure git author defaults in runtime container '${name}'`,
@@ -892,16 +908,81 @@ export class ThreadContainerService {
       return;
     }
 
-    const cloneScript = buildRuntimeThreadGitSkillsCloneScript(options);
+    const cloneScript = this.scriptRenderer.renderThreadGitSkillsCloneScript(options);
     this.runDockerExecScript(
       ["exec", "-u", "0", name, "bash", "-lc", cloneScript],
       `Failed to provision thread git skills in runtime container '${name}'`,
     );
 
-    const linkScript = buildRuntimeThreadGitSkillsLinkScript(user, options);
+    const linkScript = this.scriptRenderer.renderThreadGitSkillsLinkScript(user, options);
     this.runDockerExecScript(
       ["exec", "-u", user.agentUser, name, "bash", "-lc", linkScript],
       `Failed to provision thread git skills in runtime container '${name}'`,
+    );
+  }
+
+  private async ensureRuntimeContainerAgentMetadataFiles(
+    name: string,
+    user: ThreadContainerUser,
+    files: RuntimeAgentMetadataFile[],
+    contextMessage: string,
+  ): Promise<void> {
+    if (files.length === 0) {
+      return;
+    }
+
+    const script = this.scriptRenderer.renderAgentMetadataScript(user, files);
+    this.runDockerExecScript(
+      ["exec", "-u", user.agentUser, name, "bash", "-lc", script],
+      contextMessage,
+    );
+  }
+
+  async ensureRuntimeContainerGithubInstallations(
+    name: string,
+    user: ThreadContainerUser,
+    payload: RuntimeGithubInstallationsPayload,
+  ): Promise<void> {
+    await this.ensureRuntimeContainerAgentMetadataFiles(
+      name,
+      user,
+      [
+        {
+          filename: "installations.json",
+          content: `${JSON.stringify(payload, null, 2)}\n`,
+        },
+      ],
+      `Failed to write runtime GitHub installations metadata in container '${name}'`,
+    );
+  }
+
+  async ensureRuntimeContainerThreadMetadata(
+    name: string,
+    user: ThreadContainerUser,
+    payload: RuntimeThreadMetadataPayload,
+  ): Promise<void> {
+    const files: RuntimeAgentMetadataFile[] = [
+      {
+        filename: "thread-mcp.json",
+        content: `${JSON.stringify({ servers: payload.mcpServers }, null, 2)}\n`,
+      },
+      {
+        filename: "thread-git-skills.json",
+        content: `${JSON.stringify({ packages: payload.gitSkillPackages }, null, 2)}\n`,
+      },
+    ];
+    if (payload.threadAgentCliConfig) {
+      files.push({
+        filename: "thread-agent-cli.json",
+        content: `${JSON.stringify(payload.threadAgentCliConfig, null, 2)}\n`,
+      });
+    }
+
+    await this.ensureRuntimeContainerAgentMetadataFiles(
+      name,
+      user,
+      files,
+      `Failed to write runtime thread metadata in container '${name}'`,
     );
   }
 

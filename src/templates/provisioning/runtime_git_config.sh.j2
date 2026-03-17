@@ -1,0 +1,28 @@
+set -euo pipefail
+DEFAULT_GIT_USER_NAME={{default_git_user_name}}
+DEFAULT_GIT_USER_EMAIL={{default_git_user_email}}
+
+if ! command -v git >/dev/null 2>&1; then
+  exit 0
+fi
+
+if ! git config --global --get user.name >/dev/null 2>&1; then
+  git config --global user.name "$DEFAULT_GIT_USER_NAME"
+fi
+if ! git config --global --get user.email >/dev/null 2>&1; then
+  git config --global user.email "$DEFAULT_GIT_USER_EMAIL"
+fi
+
+if [ ! -d /workspace ]; then
+  exit 0
+fi
+
+while IFS= read -r -d '' git_dir; do
+  repo_root="$(dirname "$git_dir")"
+  if ! git -C "$repo_root" config --local --get user.name >/dev/null 2>&1; then
+    git -C "$repo_root" config --local user.name "$DEFAULT_GIT_USER_NAME"
+  fi
+  if ! git -C "$repo_root" config --local --get user.email >/dev/null 2>&1; then
+    git -C "$repo_root" config --local user.email "$DEFAULT_GIT_USER_EMAIL"
+  fi
+done < <(find /workspace -type d -name .git -print0 2>/dev/null || true)

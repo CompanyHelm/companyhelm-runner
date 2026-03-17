@@ -1,0 +1,11 @@
+set -euo pipefail
+SKILLS_ROOT={{skills_root}}
+
+install -d -m 0755 "$SKILLS_ROOT"
+
+if ! command -v git >/dev/null 2>&1; then
+  echo "git is not available in the runtime container." >&2
+  exit 1
+fi
+
+{{package_blocks}}

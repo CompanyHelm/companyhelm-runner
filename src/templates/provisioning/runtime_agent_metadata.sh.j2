@@ -1,0 +1,8 @@
+set -euo pipefail
+AGENT_HOME={{agent_home}}
+METADATA_ROOT={{metadata_root}}
+
+install -d -m 0755 "$AGENT_HOME/.companyhelm"
+install -d -m 0755 "$METADATA_ROOT"
+
+{{file_blocks}}

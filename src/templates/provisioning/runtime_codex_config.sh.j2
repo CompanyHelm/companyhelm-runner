@@ -1,0 +1,7 @@
+set -euo pipefail
+AGENT_HOME={{agent_home}}
+CONFIG_CONTENT={{config_content}}
+
+install -d -m 0755 "$AGENT_HOME/.codex"
+printf '%s' "$CONFIG_CONTENT" > "$AGENT_HOME/.codex/config.toml"
+chmod 0644 "$AGENT_HOME/.codex/config.toml"

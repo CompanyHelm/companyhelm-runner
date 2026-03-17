@@ -13,12 +13,16 @@ test("buildRootConfig maps config and state path CLI overrides", () => {
     stateDbPath: "/tmp/companyhelm-state.db",
     serverUrl: "https://example.com:50051",
     agentApiUrl: "https://example.com/agent/v1",
+    workspacePath: "/tmp/companyhelm-workspace",
+    useDedicatedWorkspaces: false,
   });
 
   assert.equal(cfg.config_directory, "/tmp/companyhelm-config");
   assert.equal(cfg.state_db_path, "/tmp/companyhelm-state.db");
   assert.equal(cfg.companyhelm_api_url, "https://example.com:50051");
   assert.equal(cfg.agent_api_url, "https://example.com/agent/v1");
+  assert.equal(cfg.workspace_path, "/tmp/companyhelm-workspace");
+  assert.equal(cfg.use_dedicated_workspaces, false);
 });
 
 test("buildRootConfig resolves relative state path CLI overrides under config path", () => {
@@ -29,6 +33,24 @@ test("buildRootConfig resolves relative state path CLI overrides under config pa
 
   assert.equal(cfg.config_directory, "/tmp/companyhelm-config");
   assert.equal(cfg.state_db_path, "/tmp/companyhelm-config/state.db");
+});
+
+test("buildRootConfig defaults workspace_path to the current working directory and shared workspaces", () => {
+  const cfg = buildRootConfig({});
+
+  assert.equal(cfg.workspace_path, process.cwd());
+  assert.equal(cfg.use_dedicated_workspaces, false);
+});
+
+test("buildRootConfig rejects combining workspacePath with dedicated workspaces", () => {
+  assert.throws(
+    () =>
+      buildRootConfig({
+        workspacePath: "/tmp/companyhelm-workspace",
+        useDedicatedWorkspaces: true,
+      }),
+    /cannot be used together/i,
+  );
 });
 
 test("isRetryableApiConnectionError returns false for unauthenticated gRPC failures", () => {
