@@ -79,7 +79,9 @@ import { createLogger, type Logger } from "../utils/logger.js";
 import { expandHome } from "../utils/path.js";
 import { containsCtrlCInterruptInput, restoreInteractiveTerminalState } from "../utils/terminal.js";
 import { DaemonStartupWatchdog } from "../utils/daemon_startup_watchdog.js";
-import { ensureWorkspaceAgentsMd } from "../service/workspace_agents.js";
+import { ThreadMetadataStore } from "../provisioning/host_provisioning/thread_metadata_store.js";
+import { ThreadWorkspaceProvisioner } from "../provisioning/host_provisioning/thread_workspace_provisioner.js";
+import { buildCodexDeveloperInstructions } from "../provisioning/runtime_provisioning/system_prompt.js";
 import { ensureRunnerStartupPreflight } from "../preflight/entrypoints.js";
 import type { RunnerStartCommandOptions } from "./runner/common.js";
 import {
@@ -144,6 +146,14 @@ interface WorkspaceGithubInstallationsPayload {
     access_token_expiration: string;
     repositories: string[];
   }>;
+}
+
+interface TrackedThreadRuntimeTarget {
+  threadId: string;
+  runtimeContainer: string;
+  homeDirectory: string;
+  uid: number;
+  gid: number;
 }
 
 interface RootCommandRuntimeOptions {
@@ -1391,7 +1401,7 @@ async function ensureThreadGitSkillsInRuntime(
   containerService: ThreadContainerService,
   logger: Logger,
 ): Promise<void> {
-  const packages = readWorkspaceThreadGitSkillsConfig(threadState.workspace, logger);
+  const packages = new ThreadMetadataStore(cfg.config_directory, logger).readThreadGitSkillsConfig(threadState.id);
   if (packages.length === 0) {
     return;
   }
@@ -1462,10 +1472,11 @@ async function reconcileThreadRunningStateBeforeUserMessage(
     };
   }
 
-  const threadMcpSetup = buildThreadCodexMcpSetup(
-    readWorkspaceThreadMcpConfig(threadState.workspace, logger),
-  );
-  const threadAgentCliConfig = readWorkspaceThreadAgentCliConfig(threadState.workspace, logger);
+  const metadataStore = new ThreadMetadataStore(cfg.config_directory, logger);
+  const persistedThreadMcpServers = metadataStore.readThreadMcpConfig(threadState.id);
+  const persistedThreadGitSkillPackages = metadataStore.readThreadGitSkillsConfig(threadState.id);
+  const threadMcpSetup = buildThreadCodexMcpSetup(persistedThreadMcpServers);
+  const threadAgentCliConfig = buildThreadAgentCliConfig(threadState.cliSecret, cfg.agent_api_url);
   const appServerSession = await getOrCreateThreadAppServerSession(
     threadState.id,
     threadState.runtimeContainer,
@@ -1484,6 +1495,15 @@ async function reconcileThreadRunningStateBeforeUserMessage(
     user: runtimeUser,
   });
   await ensureThreadGitSkillsInRuntime(cfg, threadState, containerService, logger);
+  await containerService.ensureRuntimeContainerThreadMetadata(
+    threadState.runtimeContainer,
+    runtimeUser,
+    {
+      mcpServers: persistedThreadMcpServers,
+      gitSkillPackages: persistedThreadGitSkillPackages,
+      threadAgentCliConfig,
+    },
+  );
   if (threadAgentCliConfig) {
     await containerService.ensureRuntimeContainerAgentCliConfig(
       threadState.runtimeContainer,
@@ -1533,13 +1553,21 @@ async function reconcileThreadRunningStateBeforeUserMessage(
   };
 }
 
-async function listTrackedThreadWorkspaces(cfg: Config, logger: Logger): Promise<string[]> {
+async function listTrackedThreadRuntimeTargets(cfg: Config, logger: Logger): Promise<TrackedThreadRuntimeTarget[]> {
   const { db, client } = await initDb(cfg.state_db_path);
   try {
-    const rows = await db.select({ workspace: threads.workspace }).from(threads);
-    return [...new Set(rows.map((row) => row.workspace.trim()).filter((workspace) => workspace.length > 0))];
+    return await db
+      .select({
+        threadId: threads.id,
+        runtimeContainer: threads.runtimeContainer,
+        homeDirectory: threads.homeDirectory,
+        uid: threads.uid,
+        gid: threads.gid,
+      })
+      .from(threads)
+      .all();
   } catch (error: unknown) {
-    logger.warn(`Failed to list tracked thread workspaces for GitHub installation sync: ${toErrorMessage(error)}`);
+    logger.warn(`Failed to list tracked thread runtimes for GitHub installation sync: ${toErrorMessage(error)}`);
     return [];
   } finally {
     client.close();
@@ -1570,28 +1598,53 @@ function resolveGithubInstallationsSyncDelayMs(installations: RuntimeGithubInsta
   );
 }
 
-async function syncGithubInstallationsForWorkspaces(
+async function syncGithubInstallationsForRuntimeTargets(
+  cfg: Config,
   apiClient: CompanyhelmApiClient,
   options: CompanyhelmApiCallOptions | undefined,
-  workspaceDirectories: string[],
+  runtimeTargets: TrackedThreadRuntimeTarget[],
   logger: Logger,
 ): Promise<RuntimeGithubInstallation[]> {
-  const uniqueWorkspaces = [
-    ...new Set(workspaceDirectories.map((workspace) => workspace.trim()).filter((workspace) => workspace.length > 0)),
+  const uniqueTargets = [
+    ...new Map(
+      runtimeTargets
+        .filter((target) => target.runtimeContainer.trim().length > 0)
+        .map((target) => [target.runtimeContainer, target] as const),
+    ).values(),
   ];
-  if (uniqueWorkspaces.length === 0) {
+  if (uniqueTargets.length === 0) {
     return [];
   }
 
   const installations = await loadRuntimeGithubInstallations(apiClient, options, logger);
   const payload = buildWorkspaceGithubInstallationsPayload(installations);
+  const containerService = new ThreadContainerService();
 
-  for (const workspaceDirectory of uniqueWorkspaces) {
-    writeWorkspaceGithubInstallationsPayload(workspaceDirectory, payload, logger);
+  for (const target of uniqueTargets) {
+    try {
+      if (!await containerService.isContainerRunning(target.runtimeContainer)) {
+        continue;
+      }
+
+      await containerService.ensureRuntimeContainerGithubInstallations(
+        target.runtimeContainer,
+        {
+          uid: target.uid,
+          gid: target.gid,
+          agentUser: cfg.agent_user,
+          agentHomeDirectory: target.homeDirectory,
+        },
+        payload,
+      );
+    } catch (error: unknown) {
+      logger.warn(
+        `Failed syncing GitHub installations into runtime container '${target.runtimeContainer}': ${toErrorMessage(error)}`,
+      );
+    }
   }
 
   logger.debug(
-    `Synced ${installations.length} GitHub installation token(s) to ${uniqueWorkspaces.length} workspace(s).`,
+    `Synced ${installations.length} GitHub installation token(s) to ${uniqueTargets.length} runtime container(s).`,
   );
   return installations;
 }
@@ -1627,11 +1680,12 @@ async function runGithubInstallationsSyncLoop(
   while (!signal.aborted) {
     let nextDelayMs = GITHUB_INSTALLATIONS_SYNC_INTERVAL_MS;
     try {
-      const workspaces = await listTrackedThreadWorkspaces(cfg, logger);
-      const installations = await syncGithubInstallationsForWorkspaces(
+      const runtimeTargets = await listTrackedThreadRuntimeTargets(cfg, logger);
+      const installations = await syncGithubInstallationsForRuntimeTargets(
+        cfg,
         apiClient,
         options,
-        workspaces,
+        runtimeTargets,
         logger,
       );
       nextDelayMs = resolveGithubInstallationsSyncDelayMs(installations);
@@ -1665,8 +1719,32 @@ function normalizeAdditionalModelInstructions(value: string | null | undefined):
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function buildThreadDeveloperInstructions(additionalModelInstructions: string | null | undefined): string | null {
-  return normalizeAdditionalModelInstructions(additionalModelInstructions);
+function buildThreadAgentCliConfig(
+  cliSecret: string | null | undefined,
+  agentApiUrl: string,
+): RuntimeAgentCliConfig | null {
+  const normalizedSecret = normalizeNonEmptyString(cliSecret);
+  if (!normalizedSecret) {
+    return null;
+  }
+
+  return {
+    agent_api_url: normalizeThreadAgentApiUrlForRuntime(agentApiUrl),
+    token: normalizedSecret,
+  };
+}
+
+function buildThreadDeveloperInstructions(
+  cfg: Config,
+  additionalModelInstructions: string | null | undefined,
+  cliSecret: string | null | undefined,
+): string {
+  return buildCodexDeveloperInstructions(additionalModelInstructions, {
+    homeDirectory: cfg.agent_home_directory,
+    agentApiUrl: normalizeThreadAgentApiUrlForRuntime(cfg.agent_api_url),
+    agentToken: normalizeNonEmptyString(cliSecret) ?? "<thread-secret>",
+    workspaceMode: cfg.use_dedicated_workspaces ? "dedicated" : "shared",
+  });
 }
 
 function buildUserTextInput(text: string): UserInput[] {
@@ -2208,7 +2286,14 @@ async function handleCreateThreadRequest(
   }
 
   const { db, client } = await initDb(cfg.state_db_path);
-  const threadDirectory = resolveThreadDirectory(cfg.config_directory, cfg.workspaces_directory, threadId);
+  const workspaceProvisioner = new ThreadWorkspaceProvisioner(
+    cfg.config_directory,
+    cfg.workspaces_directory,
+    cfg.workspace_path,
+    cfg.use_dedicated_workspaces,
+  );
+  const metadataStore = new ThreadMetadataStore(cfg.config_directory, logger);
+  const threadDirectory = workspaceProvisioner.resolveWorkspaceDirectory(threadId);
   const containerNames = buildThreadContainerNames(threadId);
   const hostInfo = getHostInfo(cfg.codex.codex_auth_path);
   const normalizedAdditionalModelInstructions = normalizeAdditionalModelInstructions(
@@ -2285,22 +2370,9 @@ async function handleCreateThreadRequest(
     client.close();
   }
 
-  mkdirSync(threadDirectory, { recursive: true });
-  ensureWorkspaceAgentsMd(
-    threadDirectory,
-    cfg.agent_home_directory,
-    normalizeThreadAgentApiUrlForRuntime(cfg.agent_api_url),
-    cliSecret,
-  );
-  writeWorkspaceThreadGitSkillsConfig(threadDirectory, threadGitSkillPackages, logger);
-  writeWorkspaceThreadMcpConfig(threadDirectory, threadMcpServers, logger);
-  writeWorkspaceThreadAgentCliConfig(threadDirectory, cliSecret, cfg.agent_api_url, logger);
-  await syncGithubInstallationsForWorkspaces(
-    apiClient,
-    apiCallOptions,
-    [threadDirectory],
-    logger,
-  );
+  workspaceProvisioner.ensureWorkspaceDirectory(threadId);
+  metadataStore.writeThreadGitSkillsConfig(threadId, threadGitSkillPackages);
+  metadataStore.writeThreadMcpConfig(threadId, threadMcpServers);
   logger.debug(`Thread '${threadId}' workspace initialized at '${threadDirectory}'.`);
 
   const containerService = new ThreadContainerService();
@@ -2356,10 +2428,10 @@ async function handleCreateThreadRequest(
       throw new Error(`Thread '${threadId}' disappeared before SDK bootstrap.`);
     }
 
-    const threadMcpSetup = buildThreadCodexMcpSetup(
-      readWorkspaceThreadMcpConfig(threadState.workspace, logger),
-    );
-    const threadAgentCliConfig = readWorkspaceThreadAgentCliConfig(threadState.workspace, logger);
+    const persistedThreadMcpServers = metadataStore.readThreadMcpConfig(threadState.id);
+    const persistedThreadGitSkillPackages = metadataStore.readThreadGitSkillsConfig(threadState.id);
+    const threadMcpSetup = buildThreadCodexMcpSetup(persistedThreadMcpServers);
+    const threadAgentCliConfig = buildThreadAgentCliConfig(threadState.cliSecret, cfg.agent_api_url);
     const appServerSession = await getOrCreateThreadAppServerSession(
       threadId,
       threadState.runtimeContainer,
@@ -2383,6 +2455,15 @@ async function handleCreateThreadRequest(
       user: runtimeUser,
     });
     await ensureThreadGitSkillsInRuntime(cfg, threadState, containerService, logger);
+    await containerService.ensureRuntimeContainerThreadMetadata(
+      threadState.runtimeContainer,
+      runtimeUser,
+      {
+        mcpServers: persistedThreadMcpServers,
+        gitSkillPackages: persistedThreadGitSkillPackages,
+        threadAgentCliConfig,
+      },
+    );
     if (threadAgentCliConfig) {
       await containerService.ensureRuntimeContainerAgentCliConfig(
         threadState.runtimeContainer,
@@ -2390,6 +2471,21 @@ async function handleCreateThreadRequest(
         threadAgentCliConfig,
       );
     }
+    await syncGithubInstallationsForRuntimeTargets(
+      cfg,
+      apiClient,
+      apiCallOptions,
+      [
+        {
+          threadId: threadState.id,
+          runtimeContainer: threadState.runtimeContainer,
+          homeDirectory: threadState.homeDirectory,
+          uid: threadState.uid,
+          gid: threadState.gid,
+        },
+      ],
+      logger,
+    );
     if (!appServerSession.started) {
       await containerService.ensureRuntimeContainerCodexConfig(
         threadState.runtimeContainer,
@@ -2400,7 +2496,11 @@ async function handleCreateThreadRequest(
 
     await ensureThreadAppServerSessionStarted(appServerSession);
 
-    const developerInstructions = buildThreadDeveloperInstructions(threadState.additionalModelInstructions);
+    const developerInstructions = buildThreadDeveloperInstructions(
+      cfg,
+      threadState.additionalModelInstructions,
+      threadState.cliSecret,
+    );
     logger.debug(
       `Starting app-server thread '${threadId}' with developer instructions: ${JSON.stringify(developerInstructions)}.`,
     );
@@ -2515,6 +2615,12 @@ async function deleteThreadWithCleanup(
   const containerService = new ThreadContainerService();
   try {
     const containerNames = buildThreadContainerNames(existingThread.id);
+    const workspaceProvisioner = new ThreadWorkspaceProvisioner(
+      cfg.config_directory,
+      cfg.workspaces_directory,
+      cfg.workspace_path,
+      cfg.use_dedicated_workspaces,
+    );
     await stopThreadAppServerSession(request.threadId);
     threadRolloutPaths.delete(request.threadId);
     await containerService.forceRemoveContainer(existingThread.runtimeContainer);
@@ -2523,7 +2629,8 @@ async function deleteThreadWithCleanup(
     }
     await containerService.forceRemoveVolume(containerNames.home);
     await containerService.forceRemoveVolume(containerNames.tmp);
-    removeWorkspaceDirectory(existingThread.workspace);
+    workspaceProvisioner.removeWorkspaceDirectory(existingThread.id, existingThread.workspace);
+    new ThreadMetadataStore(cfg.config_directory, createLogger("ERROR")).removeThreadMetadata(existingThread.id);
   } catch (error: unknown) {
     return {
       kind: "error",
@@ -2812,10 +2919,11 @@ async function executeCreateUserMessageRequest(
   logger: Logger,
 ): Promise<void> {
   const containerService = new ThreadContainerService();
-  const threadMcpSetup = buildThreadCodexMcpSetup(
-    readWorkspaceThreadMcpConfig(threadState.workspace, logger),
-  );
-  const threadAgentCliConfig = readWorkspaceThreadAgentCliConfig(threadState.workspace, logger);
+  const metadataStore = new ThreadMetadataStore(cfg.config_directory, logger);
+  const persistedThreadMcpServers = metadataStore.readThreadMcpConfig(threadState.id);
+  const persistedThreadGitSkillPackages = metadataStore.readThreadGitSkillsConfig(threadState.id);
+  const threadMcpSetup = buildThreadCodexMcpSetup(persistedThreadMcpServers);
+  const threadAgentCliConfig = buildThreadAgentCliConfig(threadState.cliSecret, cfg.agent_api_url);
   const appServerSession = await getOrCreateThreadAppServerSession(
     request.threadId,
     threadState.runtimeContainer,
@@ -2844,6 +2952,15 @@ async function executeCreateUserMessageRequest(
       user: runtimeUser,
     });
     await ensureThreadGitSkillsInRuntime(cfg, threadState, containerService, logger);
+    await containerService.ensureRuntimeContainerThreadMetadata(
+      threadState.runtimeContainer,
+      runtimeUser,
+      {
+        mcpServers: persistedThreadMcpServers,
+        gitSkillPackages: persistedThreadGitSkillPackages,
+        threadAgentCliConfig,
+      },
+    );
     if (threadAgentCliConfig) {
       await containerService.ensureRuntimeContainerAgentCliConfig(
         threadState.runtimeContainer,
@@ -2878,7 +2995,11 @@ async function executeCreateUserMessageRequest(
       sdkThreadId = appServerSession.sdkThreadId;
       await updateThreadTurnState(cfg, request.threadId, { sdkThreadId });
     } else {
-      const developerInstructions = buildThreadDeveloperInstructions(threadState.additionalModelInstructions);
+      const developerInstructions = buildThreadDeveloperInstructions(
+        cfg,
+        threadState.additionalModelInstructions,
+        threadState.cliSecret,
+      );
       const threadStartParams: ThreadStartParams = {
         model: request.model ?? threadState.model,
         modelProvider: null,
@@ -3599,8 +3720,14 @@ export async function runRootCommand(
 }
 
 export function buildRootConfig(options: RootCommandOptions): Config {
+  if (options.useDedicatedWorkspaces && typeof options.workspacePath === "string" && options.workspacePath.trim().length > 0) {
+    throw new Error("--workspace-path and --use-dedicated-workspaces cannot be used together.");
+  }
+
   return configSchema.parse({
     config_directory: options.configPath,
+    workspace_path: options.workspacePath,
+    use_dedicated_workspaces: options.useDedicatedWorkspaces,
     state_db_path: options.stateDbPath,
     companyhelm_api_url: options.serverUrl,
     agent_api_url: options.agentApiUrl,

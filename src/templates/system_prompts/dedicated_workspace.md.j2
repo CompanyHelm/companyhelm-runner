@@ -1,0 +1,5 @@
+## Dedicated Workspace
+
+- This runtime is using a dedicated per-thread host workspace mounted at `/workspace`.
+- Files in `/workspace` are isolated to this thread workspace lifecycle.
+- The runner may remove the host workspace when the thread is deleted.

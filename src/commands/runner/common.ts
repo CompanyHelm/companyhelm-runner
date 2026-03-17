@@ -5,6 +5,7 @@ export interface RunnerStartCommandOptions {
   configPath?: string;
   serverUrl?: string;
   agentApiUrl?: string;
+  workspacePath?: string;
   daemon?: boolean;
   logLevel?: string;
   logPath?: string;
@@ -12,6 +13,7 @@ export interface RunnerStartCommandOptions {
   stateDbPath?: string;
   useHostDockerRuntime?: boolean;
   useDedicatedAuth?: boolean;
+  useDedicatedWorkspaces?: boolean;
   hostDockerPath?: string;
   threadGitSkillsDirectory?: string;
 }
@@ -28,6 +30,7 @@ export function addRunnerStartOptions(command: Command): Command {
       "--agent-api-url <url>",
       "Agent REST API base URL for runtime containers (localhost is rewritten to http://host.docker.internal).",
     )
+    .option("--workspace-path <path>", "Shared host workspace mounted at /workspace (defaults to the current working directory).")
     .option("--secret <secret>", "Bearer secret used as gRPC Authorization header.")
     .option("--state-db-path <path>", "State database path override (defaults to state.db under the active config directory).")
     .option("--log-path <path>", "Daemon log file override.")
@@ -38,6 +41,10 @@ export function addRunnerStartOptions(command: Command): Command {
     .option(
       "--use-dedicated-auth",
       "Preserve existing dedicated Codex auth if already configured; otherwise keep Codex unconfigured on startup.",
+    )
+    .option(
+      "--use-dedicated-workspaces",
+      "Create per-thread dedicated workspaces under the configured workspaces directory.",
     )
     .option(
       "--host-docker-path <path>",

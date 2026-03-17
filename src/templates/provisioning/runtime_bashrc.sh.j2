@@ -1,0 +1,7 @@
+set -euo pipefail
+AGENT_HOME={{agent_home}}
+BASHRC_CONTENT={{bashrc_content}}
+
+install -d -m 0755 "$AGENT_HOME"
+printf '%s' "$BASHRC_CONTENT" > "$AGENT_HOME/.bashrc"
+chmod 0644 "$AGENT_HOME/.bashrc"

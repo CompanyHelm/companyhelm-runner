@@ -60,6 +60,12 @@ export const config = z.object({
     config_directory: z.string()
         .describe("The directory where the config files are stored.")
         .default(resolveConfigDirectoryDefault),
+    workspace_path: z.string()
+        .describe("Shared workspace directory mounted at /workspace when dedicated workspaces are disabled.")
+        .default(() => process.cwd()),
+    use_dedicated_workspaces: z.boolean()
+        .describe("When true, create per-thread dedicated workspaces under workspaces_directory.")
+        .default(false),
     workspaces_directory: z.string()
         .describe("The directory where thread workspaces are stored, relative to config_directory when not absolute.")
         .default("workspaces"),

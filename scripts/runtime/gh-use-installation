@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_INSTALLATIONS_FILE="/workspace/.companyhelm/installations.json"
+DEFAULT_INSTALLATIONS_FILE="${HOME:-/home/agent}/.companyhelm/agent/installations.json"
 
 usage() {
   cat <<'USAGE'
@@ -12,7 +12,7 @@ Usage:
 
 Defaults:
   Installations file comes from --file, then $COMPANYHELM_INSTALLATIONS_FILE,
-  else /workspace/.companyhelm/installations.json
+  else $HOME/.companyhelm/agent/installations.json
 USAGE
 }
 

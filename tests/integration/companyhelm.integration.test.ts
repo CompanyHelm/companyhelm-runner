@@ -54,12 +54,20 @@ const REPOSITORY_ROOT = path.resolve(__dirname, "..", "..");
 const DRIZZLE_DIRECTORY = path.join(REPOSITORY_ROOT, "drizzle");
 const DRIZZLE_JOURNAL_PATH = path.join(DRIZZLE_DIRECTORY, "meta", "_journal.json");
 const previousStartupPreflightSkipValue = process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV];
+const ensureRuntimeContainerThreadMetadataGlobalSpy = vi
+  .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerThreadMetadata")
+  .mockImplementation(async () => undefined);
+const ensureRuntimeContainerGithubInstallationsGlobalSpy = vi
+  .spyOn(threadLifecycle.ThreadContainerService.prototype, "ensureRuntimeContainerGithubInstallations")
+  .mockImplementation(async () => undefined);
 
 beforeAll(() => {
   process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV] = "1";
 });
 
 afterAll(() => {
+  ensureRuntimeContainerThreadMetadataGlobalSpy.mockRestore();
+  ensureRuntimeContainerGithubInstallationsGlobalSpy.mockRestore();
   if (previousStartupPreflightSkipValue === undefined) {
     delete process.env[RUNNER_STARTUP_PREFLIGHT_SKIP_ENV];
     return;
@@ -1641,8 +1649,9 @@ test("companyhelm root command returns threadUpdate deleted for deleteThreadRequ
   }
 });
 
-test("companyhelm root command writes synced GitHub installations payload and CLI instructions into thread workspace", async () => {
+test("companyhelm root command keeps runner metadata out of the workspace and prepends runtime prompt instructions", async () => {
   const homeDirectory = await makeTemporaryHomeDirectory("companyhelm-cli-thread-github-installations-");
+  const sharedWorkspaceDirectory = path.join(homeDirectory, "shared-workspace");
   let server: grpc.Server | undefined;
   const previousHome = process.env.HOME;
   const reconnectStopError = new Error("stop root command after github installation sync validation");
@@ -1782,6 +1791,7 @@ test("companyhelm root command writes synced GitHub installations payload and CL
     await assert.rejects(
       runRootCommand({
         serverUrl: `127.0.0.1:${started.port}/grpc`,
+        workspacePath: sharedWorkspaceDirectory,
       }),
       (error: unknown) => error === reconnectStopError,
       "expected root command to stop after github installation sync validation",
@@ -1792,50 +1802,28 @@ test("companyhelm root command writes synced GitHub installations payload and CL
 
     const stateDbPath = resolveDefaultStateDbPath(homeDirectory);
     const { db, client } = await initDb(stateDbPath);
-    let agentsMdContents = "";
-    let installationsPayload: Record<string, unknown> | null = null;
+    let threadMcpPayload: Record<string, unknown> | null = null;
     let threadGitSkillsPayload: Record<string, unknown> | null = null;
-    let threadAgentCliPayload: Record<string, unknown> | null = null;
+    let renderedDeveloperInstructions = "";
     try {
       const [threadRow] = await db.select().from(threads).where(eq(threads.id, createdThreadId!)).limit(1);
       assert.ok(threadRow, "expected thread row to exist");
       assert.equal(threadRow?.cliSecret, "thread-secret-github-installations");
-      const agentsPath = path.join(threadRow!.workspace, "AGENTS.md");
-      assert.equal(existsSync(agentsPath), true, "expected AGENTS.md to be created in thread workspace");
-      agentsMdContents = await readFile(agentsPath, "utf8");
+      assert.equal(threadRow?.workspace, sharedWorkspaceDirectory);
+      assert.equal(existsSync(path.join(threadRow!.workspace, "AGENTS.md")), false, "expected no AGENTS.md in the thread workspace");
+      assert.equal(existsSync(path.join(threadRow!.workspace, ".companyhelm")), false, "expected no runner metadata directory in the thread workspace");
 
-      const installationsPath = path.join(threadRow!.workspace, ".companyhelm", "installations.json");
-      assert.equal(existsSync(installationsPath), true, "expected installations.json to be created in thread workspace");
-      installationsPayload = JSON.parse(await readFile(installationsPath, "utf8")) as Record<string, unknown>;
+      const metadataDirectory = path.join(resolveDefaultConfigDirectory(homeDirectory), "thread-metadata", `thread-${createdThreadId}`);
+      const threadMcpPath = path.join(metadataDirectory, "thread-mcp.json");
+      assert.equal(existsSync(threadMcpPath), false, "expected no thread MCP config when none was requested");
 
-      const threadGitSkillsPath = path.join(threadRow!.workspace, ".companyhelm", "thread-git-skills.json");
-      assert.equal(existsSync(threadGitSkillsPath), true, "expected thread git skills config to be created in thread workspace");
+      const threadGitSkillsPath = path.join(metadataDirectory, "thread-git-skills.json");
+      assert.equal(existsSync(threadGitSkillsPath), true, "expected thread git skills config to be stored outside the workspace");
       threadGitSkillsPayload = JSON.parse(await readFile(threadGitSkillsPath, "utf8")) as Record<string, unknown>;
-
-      const threadAgentCliPath = path.join(threadRow!.workspace, ".companyhelm", "thread-agent-cli.json");
-      assert.equal(existsSync(threadAgentCliPath), true, "expected thread agent CLI config to be created in thread workspace");
-      threadAgentCliPayload = JSON.parse(await readFile(threadAgentCliPath, "utf8")) as Record<string, unknown>;
+      renderedDeveloperInstructions = String(startThreadWithResponseSpy.mock.calls[0]?.[0]?.developerInstructions ?? "");
     } finally {
       client.close();
     }
-
-    assert.equal(agentsMdContents.includes("## GitHub Installations"), true);
-    assert.equal(agentsMdContents.includes("list-installations"), true);
-    assert.equal(agentsMdContents.includes("gh-use-installation"), true);
-    assert.ok(installationsPayload, "expected installations payload to be parsed");
-    const syncedAt = String((installationsPayload as Record<string, unknown>).synced_at ?? "");
-    assert.equal(syncedAt.length > 0, true);
-    const rawInstallations = (installationsPayload as Record<string, unknown>).installations;
-    assert.equal(Array.isArray(rawInstallations), true);
-    const installations = (rawInstallations as Array<Record<string, unknown>>);
-    assert.equal(installations.length, 1);
-    assert.deepEqual(installations[0], {
-      installation_id: "112102565",
-      access_token: "ghs_test_installation_token",
-      access_token_expires_unix_time_ms: "1767142800000",
-      access_token_expiration: new Date(1767142800000).toISOString(),
-      repositories: ["acme/backend", "acme/frontend"],
-    });
 
     assert.ok(threadGitSkillsPayload, "expected thread git skills payload to be parsed");
     const rawThreadGitSkillPackages = (threadGitSkillsPayload as Record<string, unknown>).packages;
@@ -1861,9 +1849,13 @@ test("companyhelm root command writes synced GitHub installations payload and CL
       threadGitSkills.map((skill) => skill.linkName),
       ["brainstorming", "systematic-debugging"],
     );
-    assert.ok(threadAgentCliPayload, "expected thread agent CLI payload to be parsed");
-    assert.equal(threadAgentCliPayload.agent_api_url, "https://api.companyhelm.com/agent/v1");
-    assert.equal(threadAgentCliPayload.token, "thread-secret-github-installations");
+    assert.equal(renderedDeveloperInstructions.includes("## GitHub Installations"), true);
+    assert.equal(renderedDeveloperInstructions.includes("## Shared Workspace"), true);
+    assert.equal(
+      renderedDeveloperInstructions.includes("/home/agent/.companyhelm/agent/installations.json"),
+      true,
+    );
+    assert.equal(renderedDeveloperInstructions.includes("thread-secret-github-installations"), true);
   } finally {
     reconnectDelaySpy.mockRestore();
     createThreadContainersSpy.mockRestore();
@@ -1998,6 +1990,7 @@ test("companyhelm root command echoes app-server thread/start response id on thr
     await assert.rejects(
       runRootCommand({
         serverUrl: `127.0.0.1:${started.port}/grpc`,
+        useDedicatedWorkspaces: true,
       }),
       (error: unknown) => error === reconnectStopError,
       "expected root command to stop after create-thread request id validation",
@@ -2212,6 +2205,7 @@ test("companyhelm root command handles full lifecycle: create thread and delete 
     await assert.rejects(
       runRootCommand({
         serverUrl: `127.0.0.1:${started.port}/grpc`,
+        useDedicatedWorkspaces: true,
       }),
       (error: unknown) => error === reconnectStopError,
       "expected root command to stop after first validated lifecycle flow",
@@ -2568,10 +2562,16 @@ test(
       assert.equal(startTurnSpy.mock.calls.length, 2, "expected one turn per user message");
       assert.equal(startThreadWithResponseSpy.mock.calls[0]?.[0]?.approvalPolicy, "never", "expected yolo approval on thread/start");
       assert.equal(startThreadWithResponseSpy.mock.calls[0]?.[0]?.sandbox, "danger-full-access", "expected yolo sandbox on thread/start");
+      const developerInstructions = String(startThreadWithResponseSpy.mock.calls[0]?.[0]?.developerInstructions ?? "");
       assert.equal(
-        startThreadWithResponseSpy.mock.calls[0]?.[0]?.developerInstructions,
-        normalizedAdditionalModelInstructions,
-        "expected additional model instructions to be sent as thread/start developerInstructions",
+        developerInstructions.includes("## Shared Workspace"),
+        true,
+        "expected shared workspace guidance in thread/start developerInstructions",
+      );
+      assert.equal(
+        developerInstructions.trimEnd().endsWith(normalizedAdditionalModelInstructions),
+        true,
+        "expected additional model instructions to be appended after the runtime prompt",
       );
       assert.equal(
         debugSpy.mock.calls.some(
