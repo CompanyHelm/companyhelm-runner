@@ -9,9 +9,12 @@ test("renderRuntimeSystemPrompt includes common and shared workspace guidance", 
     homeDirectory: "/home/agent",
     agentApiUrl: "http://host.docker.internal:3000/agent/v1",
     agentToken: "thread-secret-123",
+    threadId: "thread-api-123",
     workspaceMode: "shared",
   });
 
+  assert.equal(rendered.includes("## Identity"), true);
+  assert.equal(rendered.includes("thread-api-123"), true);
   assert.equal(rendered.includes("## Workspace Structure"), true);
   assert.equal(rendered.includes("## Shared Workspace"), true);
   assert.equal(rendered.includes("## Dedicated Workspace"), false);
@@ -28,9 +31,11 @@ test("renderRuntimeSystemPrompt includes dedicated workspace guidance when reque
     homeDirectory: "/home/agent",
     agentApiUrl: "http://host.docker.internal:3000/agent/v1",
     agentToken: "thread-secret-123",
+    threadId: "thread-api-456",
     workspaceMode: "dedicated",
   });
 
+  assert.equal(rendered.includes("thread-api-456"), true);
   assert.equal(rendered.includes("## Dedicated Workspace"), true);
   assert.equal(rendered.includes("## Shared Workspace"), false);
 });
@@ -40,11 +45,13 @@ test("buildCodexDeveloperInstructions prepends the rendered system prompt to add
     homeDirectory: "/home/agent",
     agentApiUrl: "http://host.docker.internal:3000/agent/v1",
     agentToken: "thread-secret-123",
+    threadId: "thread-api-789",
     workspaceMode: "shared",
   });
 
   assert.ok(rendered);
   assert.equal(rendered.startsWith("# Agent Instructions"), true);
+  assert.equal(rendered.includes("thread-api-789"), true);
   assert.equal(rendered.includes("Ask for explicit assumptions before coding."), true);
   assert.equal(
     rendered.trimEnd().endsWith("Ask for explicit assumptions before coding."),

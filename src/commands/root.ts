@@ -1756,6 +1756,7 @@ function buildThreadAgentCliConfig(
 }
 
 function buildThreadDeveloperInstructions(
+  threadId: string,
   cfg: Config,
   additionalModelInstructions: string | null | undefined,
   cliSecret: string | null | undefined,
@@ -1764,6 +1765,7 @@ function buildThreadDeveloperInstructions(
     homeDirectory: cfg.agent_home_directory,
     agentApiUrl: normalizeThreadAgentApiUrlForRuntime(cfg.agent_api_url),
     agentToken: normalizeNonEmptyString(cliSecret) ?? "<thread-secret>",
+    threadId,
     workspaceMode: cfg.use_dedicated_workspaces ? "dedicated" : "shared",
   });
 }
@@ -2518,6 +2520,7 @@ async function handleCreateThreadRequest(
     await ensureThreadAppServerSessionStarted(appServerSession);
 
     const developerInstructions = buildThreadDeveloperInstructions(
+      threadId,
       cfg,
       threadState.additionalModelInstructions,
       threadState.cliSecret,
@@ -3017,6 +3020,7 @@ async function executeCreateUserMessageRequest(
       await updateThreadTurnState(cfg, request.threadId, { sdkThreadId });
     } else {
       const developerInstructions = buildThreadDeveloperInstructions(
+        request.threadId,
         cfg,
         threadState.additionalModelInstructions,
         threadState.cliSecret,

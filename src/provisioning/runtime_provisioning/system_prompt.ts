@@ -6,6 +6,7 @@ export interface RuntimeSystemPromptOptions {
   homeDirectory: string;
   agentApiUrl: string;
   agentToken: string;
+  threadId: string;
   workspaceMode: RuntimeWorkspaceMode;
 }
 
@@ -26,6 +27,7 @@ export class RuntimeSystemPromptRenderer {
       home_directory: options.homeDirectory,
       agent_api_url: options.agentApiUrl,
       agent_token: options.agentToken,
+      thread_id: options.threadId,
     };
     const common = this.templateRenderer.render("system_prompts/common.md.j2", context).trim();
     const workspaceSpecificTemplate = options.workspaceMode === "dedicated"
