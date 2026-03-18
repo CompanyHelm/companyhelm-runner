@@ -689,8 +689,12 @@ export function extractThreadTokenUsageUpdateFromNotification(
     return null;
   }
 
-  const totalUsage = resolveTokenUsageBreakdown(tokenUsage.total);
-  const lastUsage = resolveTokenUsageBreakdown(tokenUsage.last);
+  const totalUsage = resolveTokenUsageBreakdown(
+    tokenUsage.total ?? tokenUsage.total_token_usage,
+  );
+  const lastUsage = resolveTokenUsageBreakdown(
+    tokenUsage.last ?? tokenUsage.last_token_usage,
+  );
   if (!totalUsage || !lastUsage) {
     return null;
   }
