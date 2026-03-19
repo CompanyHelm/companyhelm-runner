@@ -19,7 +19,7 @@ test("config defaults CompanyHelm server URL", () => {
   assert.equal(cfg.companyhelm_api_url, "https://api.companyhelm.com:50051");
 });
 
-test("config defaults agent API URL for companyhelm-agent", () => {
+test("config defaults the agent API URL", () => {
   const cfg = config.parse({});
   assert.equal(cfg.agent_api_url, "https://api.companyhelm.com/agent/v1");
 });

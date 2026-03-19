@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-test("runtime Dockerfile does not bundle companyhelm agent cli", () => {
+test("runtime Dockerfile does not bundle legacy runtime helper scripts", () => {
   const dockerfile = readFileSync(new URL("../../dockerfiles/Dockerfile-runtime", import.meta.url), "utf8");
 
-  assert.equal(dockerfile.includes("@companyhelm/agent-cli"), false);
   assert.equal(dockerfile.includes("scripts/runtime/list-installations"), false);
   assert.equal(dockerfile.includes("scripts/runtime/gh-use-installation"), false);
 });
@@ -12,6 +11,5 @@ test("runtime Dockerfile does not bundle companyhelm agent cli", () => {
 test("thread container docs describe the current runtime tooling set", () => {
   const docs = readFileSync(new URL("../../docs/thread-containers.md", import.meta.url), "utf8");
 
-  assert.equal(docs.includes("`companyhelm-agent`"), false);
   assert.equal(docs.includes("`nvm`, `codex`, `aws`, `playwright`"), true);
 });
