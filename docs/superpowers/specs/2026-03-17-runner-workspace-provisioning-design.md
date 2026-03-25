@@ -69,7 +69,7 @@ Runner-managed metadata files move under the agent-owned directory inside the ru
 - `/home/agent/.companyhelm/agent/installations.json`
 - `/home/agent/.companyhelm/agent/thread-git-skills.json`
 - `/home/agent/.companyhelm/agent/thread-mcp.json`
-- `/home/agent/.companyhelm/agent/thread-agent-cli.json`
+- `/home/agent/.companyhelm/agent/thread-agent-config.json`
 
 No `AGENTS.md` or `agents.md` files are created by the runner.
 
@@ -115,7 +115,7 @@ Responsibilities:
 - `.bashrc` provisioning
 - Codex config provisioning
 - runner metadata directory provisioning under `/home/agent/.companyhelm/agent`
-- agent CLI config provisioning
+- agent API config provisioning
 - git identity provisioning
 - thread git skills clone/link provisioning
 - render provisioning shell commands from Jinja templates instead of assembling multi-line shell scripts inline in TypeScript
@@ -126,7 +126,7 @@ Suggested modules:
 - `runtime_shell_provisioner.ts`
 - `runtime_codex_provisioner.ts`
 - `runtime_agent_metadata_provisioner.ts`
-- `runtime_agent_cli_provisioner.ts`
+- `runtime_agent_config_provisioner.ts`
 - `runtime_git_provisioner.ts`
 - `runtime_thread_git_skills_provisioner.ts`
 
@@ -138,7 +138,7 @@ Suggested template layout:
 - `src/templates/provisioning/runtime_bashrc.sh.j2`
 - `src/templates/provisioning/runtime_codex_config.sh.j2`
 - `src/templates/provisioning/runtime_agent_metadata.sh.j2`
-- `src/templates/provisioning/runtime_agent_cli_config.sh.j2`
+- `src/templates/provisioning/runtime_agent_config.sh.j2`
 - `src/templates/provisioning/runtime_git_config.sh.j2`
 - `src/templates/provisioning/runtime_thread_git_skills_clone.sh.j2`
 - `src/templates/provisioning/runtime_thread_git_skills_link.sh.j2`
@@ -203,6 +203,6 @@ The runtime-owned metadata files should instead live under:
 - `/home/agent/.companyhelm/agent/installations.json`
 - `/home/agent/.companyhelm/agent/thread-git-skills.json`
 - `/home/agent/.companyhelm/agent/thread-mcp.json`
-- `/home/agent/.companyhelm/agent/thread-agent-cli.json`
+- `/home/agent/.companyhelm/agent/thread-agent-config.json`
 
 No other top-level workspace files should be created by the runner as part of this task.
